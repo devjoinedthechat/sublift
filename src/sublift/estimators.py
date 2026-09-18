@@ -50,6 +50,23 @@ _ESTIMATORS = ("unadjusted", "stratified", "adjusted")
 _ADJUSTED_MIN_N = 5_000
 
 
+def _require_two_arms(panel: SubscriberPanel) -> None:
+    """These estimators compare one treatment against one control.
+
+    Running them once per arm and reporting whichever looked best is a
+    multiple-comparisons problem, so the refusal points at the two ways to do it
+    deliberately rather than by accident.
+    """
+    if panel.n_arms > 2:
+        raise NotIdentifiedError(
+            f"This panel has {panel.n_arms} arms {list(panel.arm_labels)}, and this estimator "
+            "compares two. Use sublift.multi_arm_lift(), which tests every arm against the "
+            "control and controls the family-wise error rate, or panel.contrast('<arm>') to "
+            "pull out one comparison deliberately. Looping over arms and reporting the best "
+            "one inflates the false-positive rate by roughly the number of arms."
+        )
+
+
 @dataclass(frozen=True)
 class ArmSummary:
     label: str
@@ -311,6 +328,7 @@ def _estimate(
 ):
     if estimator not in _ESTIMATORS:
         raise ValueError(f"estimator must be one of {_ESTIMATORS}, got {estimator!r}.")
+    _require_two_arms(panel)
     if not 0 < alpha < 1:
         raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
 
@@ -605,8 +623,16 @@ def _person_period(panel: SubscriberPanel, horizon: int):
 
 
 def _adjusted(
-    panel, horizon, weights, covariates, n_boot, alpha, allow_extrapolation, seed,
-    inference="influence", censoring_covariates=None,
+    panel,
+    horizon,
+    weights,
+    covariates,
+    n_boot,
+    alpha,
+    allow_extrapolation,
+    seed,
+    inference="influence",
+    censoring_covariates=None,
 ):
     """Covariate-adjusted g-computation, corrected by its efficient influence function.
 

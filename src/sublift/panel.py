@@ -54,10 +54,10 @@ class SubscriberPanel:
     """
 
     subject: np.ndarray
-    arm: np.ndarray  # 0 = control, 1 = treatment
+    arm: np.ndarray  # 0 = control, 1.. = treatment arms
     n_periods: np.ndarray
     event: np.ndarray
-    arm_labels: tuple[str, str] = ("control", "treatment")
+    arm_labels: tuple[str, ...] = ("control", "treatment")
     covariates: pd.DataFrame | None = None
     revenue: np.ndarray | None = field(default=None, repr=False)
     cause: np.ndarray | None = field(default=None, repr=False)
@@ -384,6 +384,48 @@ class SubscriberPanel:
         return len(self.subject)
 
     @property
+    def n_arms(self) -> int:
+        return len(self.arm_labels)
+
+    @property
+    def treatment_labels(self) -> tuple[str, ...]:
+        """Every arm except the control."""
+        return self.arm_labels[1:]
+
+    def contrast(self, treatment: str) -> SubscriberPanel:
+        """A two-arm panel of the control against one named treatment arm.
+
+        Lets the ordinary estimators run on one comparison from a multi-arm
+        experiment. Doing that for several arms and reporting the best is a
+        multiple-comparisons problem, which :func:`sublift.multi_arm_lift`
+        handles and this method does not.
+        """
+        if treatment not in self.arm_labels:
+            raise PanelError(f"{treatment!r} is not one of this panel's arms {list(self.arm_labels)}.")
+        index = self.arm_labels.index(treatment)
+        if index == 0:
+            raise PanelError(f"{treatment!r} is the control arm; name a treatment arm.")
+        idx = np.flatnonzero(np.isin(self.arm, [0, index]))
+        # Built directly rather than via take(), which would carry every arm label
+        # through and then fail validation on the arms that are being dropped.
+        return SubscriberPanel(
+            subject=self.subject[idx],
+            arm=(self.arm[idx] == index).astype(np.int16),
+            n_periods=self.n_periods[idx],
+            event=self.event[idx],
+            arm_labels=(self.arm_labels[0], treatment),
+            covariates=(
+                self.covariates.iloc[idx].reset_index(drop=True) if self.covariates is not None else None
+            ),
+            revenue=self.revenue[idx] if self.revenue is not None else None,
+            cause=self.cause[idx] if self.cause is not None else None,
+            cause_labels=self.cause_labels,
+            potential_followup=(
+                self.potential_followup[idx] if self.potential_followup is not None else None
+            ),
+        )
+
+    @property
     def max_period(self) -> int:
         """Longest observed follow-up. Estimating past this needs extrapolation."""
         return int(self.n_periods.max())
@@ -395,7 +437,7 @@ class SubscriberPanel:
         The usable horizon: past it, at least one arm's survival curve is being
         carried forward on no data, so a contrast there is not a measurement.
         """
-        return int(min(self.n_periods[self.arm == a].max() for a in (0, 1)))
+        return int(min(self.n_periods[self.arm == a].max() for a in range(self.n_arms)))
 
     def subset(self, mask: np.ndarray) -> SubscriberPanel:
         """A new panel over the subjects selected by a boolean mask.
@@ -469,10 +511,9 @@ class SubscriberPanel:
         return pd.DataFrame(rows)
 
     def __repr__(self) -> str:
-        c, t = self.arm_labels
+        split = " / ".join(f"{int((self.arm == a).sum())} {label}" for a, label in enumerate(self.arm_labels))
         return (
-            f"SubscriberPanel({self.n_subjects} subjects, "
-            f"{int((self.arm == 0).sum())} {c} / {int((self.arm == 1).sum())} {t}, "
+            f"SubscriberPanel({self.n_subjects} subjects, {split}, "
             f"{self.event.mean():.0%} churned, follow-up {self.followup} periods)"
         )
 
@@ -510,24 +551,31 @@ def _as_event(s: pd.Series, name: str) -> np.ndarray:
     return vals.to_numpy().astype(bool)
 
 
-def _as_arm(s: pd.Series, name: str, control: object | None) -> tuple[np.ndarray, tuple[str, str]]:
-    levels = pd.unique(s.dropna())
+def _as_arm(s: pd.Series, name: str, control: object | None) -> tuple[np.ndarray, tuple[str, ...]]:
+    """Encode arm assignment, with the control arm always at index 0.
+
+    Any number of arms is accepted here; it is the *estimators* that decide what
+    they can do with more than two, so that a three-arm panel can be inspected
+    and diagnosed before anything refuses to run on it.
+    """
     if s.isna().any():
         raise PanelError(f"{name!r} contains missing values; every subject must have an assignment.")
-    if len(levels) != 2:
+    levels = sorted(pd.unique(s.dropna()), key=repr)
+    if len(levels) < 2:
         raise PanelError(
-            f"{name!r} has {len(levels)} distinct values {list(levels[:5])}; sublift v0.1 "
-            "compares exactly two arms. Filter to one pair at a time."
+            f"{name!r} has only {len(levels)} distinct value(s); an experiment needs at least "
+            "a treatment and a holdout."
         )
-    levels = sorted(levels, key=repr)
     if control is None:
         ctrl = levels[0]
     else:
         if control not in levels:
             raise PanelError(f"control={control!r} is not one of the observed arms {levels}.")
         ctrl = control
-    treat = levels[1] if levels[0] == ctrl else levels[0]
-    return (s.to_numpy() != ctrl).astype(np.int8), (str(ctrl), str(treat))
+    ordered = [ctrl] + [level for level in levels if level != ctrl]
+    lookup = {level: i for i, level in enumerate(ordered)}
+    codes = s.map(lookup).to_numpy().astype(np.int16)
+    return codes, tuple(str(level) for level in ordered)
 
 
 def _broadcast_revenue(per_subject: np.ndarray, n_periods: np.ndarray) -> np.ndarray:

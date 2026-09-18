@@ -11,6 +11,25 @@ slipped into a patch release.
 ## [Unreleased]
 
 ### Added
+- **`multi_arm_lift`: several treatment arms against one control, with family-wise error
+  control.** Testing three save offers against a holdout and reporting whichever looked best is
+  one experiment with three chances to be wrong: with four arms and no real effect, declaring at
+  least one a winner happens 13.0% of the time against a nominal 5%. With the correction, 4.3%.
+
+  The default correction is single-step **max-t**, calibrated against the correlation between
+  contrasts — they share a control arm, so they are correlated at exactly 0.5 with equal arm
+  sizes, and Bonferroni pays for independence the family does not have. The measured saving is
+  honest but modest: 1.1% on the critical value at two arms rising to 3.1% at eight, so roughly
+  2–6% fewer subscribers for the same power. `"bonferroni"`, `"holm"` and `"none"` are also
+  available.
+
+  `best()` returns `None` when nothing survives the correction, because in a null experiment
+  some arm always has the largest point estimate.
+- `SubscriberPanel` now holds any number of arms, with `n_arms`, `treatment_labels` and
+  `contrast("<arm>")` to pull out one comparison. The two-arm estimators refuse to run on a
+  multi-arm panel and point at `multi_arm_lift`, so looping over arms is hard to do by accident.
+- `check_randomization` generalizes to K arms, with `expected_shares=` for a designed imbalance.
+- `simulate_multi_arm` for generating multi-arm experiments with per-arm known truth.
 - **`check_censoring`.** The assumption that subscribers are censored because you cut the data,
   rather than because of anything they did, was previously untestable and documented as
   unchecked. It is now checked: if the panel records potential follow-up the question is settled

@@ -68,10 +68,45 @@ def test_post_assignment_covariate_is_rejected():
         )
 
 
-def test_three_arms_rejected():
-    bad = long_frame(variant=["a", "a", "a", "b", "b", "c"])
-    with pytest.raises(PanelError, match="exactly two arms"):
-        SubscriberPanel.from_periods(bad, subject="uid", period="cycle", churned="churned", arm="variant")
+def test_three_arms_are_accepted_by_the_panel():
+    """The panel holds any number of arms; the estimators decide what to do with them."""
+    p = SubscriberPanel.from_periods(
+        long_frame(variant=["a", "a", "a", "b", "b", "c"]),
+        subject="uid",
+        period="cycle",
+        churned="churned",
+        arm="variant",
+    )
+    assert p.n_arms == 3
+    assert p.arm_labels == ("a", "b", "c")
+    assert p.treatment_labels == ("b", "c")
+
+
+def test_contrast_pulls_out_one_comparison():
+    p = SubscriberPanel.from_periods(
+        long_frame(variant=["a", "a", "a", "b", "b", "c"]),
+        subject="uid",
+        period="cycle",
+        churned="churned",
+        arm="variant",
+    )
+    pair = p.contrast("c")
+    assert pair.n_arms == 2
+    assert pair.arm_labels == ("a", "c")
+    assert pair.n_subjects == 2  # the "b" subscriber is excluded
+    with pytest.raises(PanelError, match="is the control arm"):
+        p.contrast("a")
+
+
+def test_a_single_arm_is_rejected():
+    with pytest.raises(PanelError, match="at least"):
+        SubscriberPanel.from_periods(
+            long_frame(variant=["a"] * 6),
+            subject="uid",
+            period="cycle",
+            churned="churned",
+            arm="variant",
+        )
 
 
 def test_zero_period_rejected():

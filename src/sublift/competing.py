@@ -146,6 +146,11 @@ def churn_decomposition(
             "This panel has no cause of churn. Rebuild it with cause='<column>' -- typically a "
             "column distinguishing voluntary cancellation from involuntary/payment churn."
         )
+    if panel.n_arms > 2:
+        raise NotIdentifiedError(
+            f"churn_decomposition compares two arms; this panel has {panel.n_arms}. "
+            "Use panel.contrast('<arm>') to choose one comparison."
+        )
     horizon = int(horizon) if horizon is not None else panel.followup
     if horizon > panel.followup and not allow_extrapolation:
         raise NotIdentifiedError(

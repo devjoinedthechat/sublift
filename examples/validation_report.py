@@ -181,8 +181,32 @@ for name, kw in configs_ic:
     print(f"   {name:<26s} {np.mean(bias):>+9.4f} {covered / 120:>8.1%}")
 print("   (true effect +0.2587; detectable and partly correctable, not solvable)")
 
+# --------------------------------------------------------------- multiple arms
+rule("6. Several arms: does the correction control the family-wise error rate?")
+print("   Four treatment arms against one holdout, none of which works.")
+
+reps_ma = 200
+corrections = ("none", "max-t", "holm", "bonferroni")
+false_families = dict.fromkeys(corrections, 0)
+for r in range(reps_ma):
+    sim = sl.simulate_multi_arm(n=16_000, effects={"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}, seed=40_000 + r)
+    for correction in corrections:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = sl.multi_arm_lift(sim.panel, horizon=HORIZON, estimator="unadjusted", correction=correction)
+        if correction == "holm":
+            hit = any(c.adjusted_p_value < 0.05 for c in res.contrasts)
+        else:
+            hit = any(c.significant for c in res.contrasts)
+        false_families[correction] += hit
+
+print(f"   {'correction':<14s} {'declared a winner':>18s}")
+for correction in corrections:
+    print(f"   {correction:<14s} {false_families[correction] / reps_ma:>17.1%}")
+print("   (nominal 5%; uncorrected sits below 18.5% because the contrasts share a control)")
+
 # -------------------------------------------------------------------- uplift
-rule("6. Uplift: why the default learner is not a T-learner")
+rule("7. Uplift: why the default learner is not a T-learner")
 print(f"   {'regime':<32s} {'T-learner':>10s} {'pooled+shrunk':>14s}")
 covs = ["engagement", "plan", "tenure_bucket"]
 for em, label in ((0.0, "constant odds ratio"), (1.5, "strong effect modification")):

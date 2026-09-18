@@ -16,8 +16,10 @@ import pytest
 from sublift import (
     check_censoring,
     churn_decomposition,
+    multi_arm_lift,
     retained_periods_lift,
     simulate_experiment,
+    simulate_multi_arm,
 )
 
 pytestmark = pytest.mark.slow
@@ -401,3 +403,67 @@ def test_the_censoring_check_fires_exactly_when_it_should():
     assert flagged_when_independent <= 2, (
         f"false alarms on {flagged_when_independent}/{reps} independent-censoring experiments"
     )
+
+
+# --------------------------------------------------------------- multiple arms
+
+
+def test_multiple_arms_inflate_the_error_rate_and_the_correction_controls_it():
+    """The motivating claim for multi_arm_lift, as an assertion.
+
+    Four treatment arms, none of which works. Without a correction, declaring at
+    least one of them a winner happens far more often than 5%; with one, it does
+    not. max-t should also be the *least* conservative of the corrections, since
+    it is the only one that knows the contrasts share a control arm.
+    """
+    reps = 250
+    corrections = ("none", "max-t", "holm", "bonferroni")
+    false_families = dict.fromkeys(corrections, 0)
+
+    for r in range(reps):
+        sim = simulate_multi_arm(n=16_000, effects={"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}, seed=40_000 + r)
+        for correction in corrections:
+            res = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted", correction=correction)
+            if correction == "holm":
+                hit = any(c.adjusted_p_value < 0.05 for c in res.contrasts)
+            else:
+                hit = any(c.significant for c in res.contrasts)
+            false_families[correction] += hit
+
+    rate = {c: false_families[c] / reps for c in corrections}
+    assert rate["none"] > 0.09, f"uncorrected rate {rate['none']:.1%} should be well above 5%"
+    for correction in ("max-t", "holm", "bonferroni"):
+        assert rate[correction] <= 0.08, f"{correction} did not control FWER: {rate[correction]:.1%}"
+    # Correlated contrasts: Bonferroni pays for independence the family does not have.
+    assert rate["max-t"] >= rate["bonferroni"] - 0.02
+
+
+def test_multi_arm_estimates_are_unbiased_per_arm():
+    reps = 120
+    errors: dict[str, list[float]] = {}
+    for r in range(reps):
+        sim = simulate_multi_arm(
+            n=16_000, effects={"strong": 0.85, "weak": 0.95, "null": 1.0}, seed=60_000 + r
+        )
+        res = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted")
+        for contrast in res.contrasts:
+            errors.setdefault(contrast.label, []).append(
+                contrast.estimate - sim.true_arm_lift[contrast.label]
+            )
+    for label, values in errors.items():
+        e = np.array(values)
+        assert abs(e.mean()) < 3.5 * e.std(ddof=1) / np.sqrt(reps), f"{label} is biased"
+
+
+def test_simultaneous_intervals_cover_every_arm_at_once():
+    """A 95% simultaneous interval should contain all three true effects, 95% of the time."""
+    reps = 250
+    all_covered = 0
+    for r in range(reps):
+        sim = simulate_multi_arm(
+            n=16_000, effects={"strong": 0.85, "weak": 0.95, "null": 1.0}, seed=70_000 + r
+        )
+        res = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted")
+        all_covered += all(c.ci[0] <= sim.true_arm_lift[c.label] <= c.ci[1] for c in res.contrasts)
+    coverage = all_covered / reps
+    assert 0.92 <= coverage <= 1.0, f"simultaneous coverage {coverage:.1%}"

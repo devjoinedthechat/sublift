@@ -5,6 +5,7 @@
 | [Getting started](getting-started.md) | From a warehouse table to a defensible number |
 | [Choosing an estimator](choosing-an-estimator.md) | Which of the three, and why |
 | [Monitoring a running test](monitoring.md) | Why peeking breaks a p-value, and what to use instead |
+| [Testing several arms](multi-arm.md) | Many offers, one holdout, one error rate |
 | [Voluntary vs involuntary churn](competing-risks.md) | Competing risks, and why the split is exact |
 | [Assumptions](assumptions.md) | When sublift is wrong — read before you ship a decision |
 | [Method](method.md) | The estimand, the influence functions, the references |

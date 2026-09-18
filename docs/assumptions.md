@@ -89,14 +89,18 @@ By default voluntary and involuntary churn are pooled. See [competing risks](com
 
 **Checked:** no, but opt-in and cheap: pass `cause=` and get the split.
 
-## 6. Two arms
+## 6. One comparison, or a family you declared
 
-`unadjusted` and `stratified` assume nothing about the number of arms beyond there being two;
-`adjusted` fits a model per arm. Multi-arm tests with proper multiple-comparison control are
-not supported. Filtering to one pair at a time and comparing several pairs inflates your error
-rate in a way sublift does not track.
+The ordinary estimators compare two arms. Running them once per arm and reporting the best
+inflates the error rate by roughly the number of arms — 13% against a nominal 5% with four arms,
+measured. Use [`multi_arm_lift`](multi-arm.md), which controls the family-wise rate.
 
-**Checked:** yes, in that a third arm is rejected rather than silently collapsed.
+**Checked:** yes. The two-arm estimators refuse to run on a multi-arm panel and point at
+`multi_arm_lift` or `panel.contrast()`.
+
+What is **not** checked is multiplicity across *metrics, segments and horizons*. Testing one arm
+on twelve metrics has the same problem and sublift does not track it. Fix the primary metric and
+horizon before you look.
 
 ## 7. For `adjusted` specifically
 

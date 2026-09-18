@@ -63,15 +63,14 @@ class RandomizationCheck:
         return not self.srm_flagged and not self.imbalanced
 
     def __str__(self) -> str:
-        labels = list(self.counts)
         total = sum(self.counts.values())
-        observed = self.counts[labels[1]] / total
+        split = "   ".join(f"{label}: {n:,}" for label, n in self.counts.items())
+        shares = " / ".join(f"{n / total:.4f}" for n in self.counts.values())
         lines = [
             "Randomization check",
             "===================",
-            f"  {labels[0]}: {self.counts[labels[0]]:,}   {labels[1]}: {self.counts[labels[1]]:,}",
-            f"  observed split {observed:.4f} vs expected {self.expected_ratio:.4f}"
-            f"   SRM p = {self.srm_p_value:.2e}",
+            f"  {split}",
+            f"  observed split {shares}   SRM p = {self.srm_p_value:.2e}",
         ]
         if self.srm_flagged:
             lines += [
@@ -95,6 +94,7 @@ def check_randomization(
     panel: SubscriberPanel,
     *,
     expected_ratio: float = 0.5,
+    expected_shares: dict[str, float] | None = None,
     srm_alpha: float = SRM_ALPHA,
     smd_threshold: float = SMD_THRESHOLD,
 ) -> RandomizationCheck:
@@ -107,13 +107,31 @@ def check_randomization(
         treatment arm. Pass the designed ratio, not the observed one -- checking
         the data against itself proves nothing.
     """
-    if not 0 < expected_ratio < 1:
+    if expected_shares is None and not 0 < expected_ratio < 1:
         raise ValueError(f"expected_ratio must be in (0, 1), got {expected_ratio}.")
 
     counts = {label: int((panel.arm == a).sum()) for a, label in enumerate(panel.arm_labels)}
     n = sum(counts.values())
-    expected = [n * (1 - expected_ratio), n * expected_ratio]
-    observed = [counts[panel.arm_labels[0]], counts[panel.arm_labels[1]]]
+    observed = [counts[label] for label in panel.arm_labels]
+
+    if panel.n_arms == 2:
+        expected = [n * (1 - expected_ratio), n * expected_ratio]
+    else:
+        # With more than two arms an equal split is the only sane default; a designed
+        # imbalance has to be passed explicitly, because guessing it from the data is
+        # exactly the check being performed.
+        if expected_ratio not in (None, 0.5):
+            raise ValueError(
+                "expected_ratio describes a two-arm split. For a multi-arm panel pass "
+                "expected_shares={'arm': share, ...} or leave it unset for an equal split."
+            )
+        expected = [n / panel.n_arms] * panel.n_arms
+    if expected_shares is not None:
+        missing = set(panel.arm_labels) - set(expected_shares)
+        if missing:
+            raise ValueError(f"expected_shares is missing arm(s) {sorted(missing)}.")
+        total = float(sum(expected_shares[label] for label in panel.arm_labels))
+        expected = [n * expected_shares[label] / total for label in panel.arm_labels]
     p_value = float(stats.chisquare(observed, f_exp=expected).pvalue)
 
     balance = _balance(panel) if panel.covariates is not None else None
@@ -136,7 +154,9 @@ def _balance(panel: SubscriberPanel) -> pd.DataFrame:
     imbalance is, which is the question. Above about 0.1 is worth investigating.
     """
     rows = []
-    treat, ctrl = panel.arm == 1, panel.arm == 0
+    # Balance is reported against the control arm, which is the comparison every
+    # contrast is made against.
+    treat, ctrl = panel.arm > 0, panel.arm == 0
     for col in panel.covariates.columns:
         s = panel.covariates[col]
         if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
@@ -299,9 +319,7 @@ def check_censoring(
     df = X.shape[1]
     p_value = float(_stats.chi2.sf(max(statistic, 0.0), df))
 
-    coefficients = pd.DataFrame(
-        {"covariate": names, "coefficient": fit_full.coef[horizon:]}
-    )
+    coefficients = pd.DataFrame({"covariate": names, "coefficient": fit_full.coef[horizon:]})
     return CensoringCheck(False, n_censored, float(statistic), p_value, df, coefficients, alpha)
 
 

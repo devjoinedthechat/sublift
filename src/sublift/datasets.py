@@ -28,7 +28,7 @@ import pandas as pd
 
 from .panel import SubscriberPanel
 
-__all__ = ["simulate_experiment", "SimulatedExperiment"]
+__all__ = ["simulate_experiment", "simulate_multi_arm", "SimulatedExperiment"]
 
 _TRUTH_DRAWS = 250_000
 _OFFSET_CACHE: dict[tuple, np.ndarray] = {}
@@ -47,6 +47,7 @@ class SimulatedExperiment:
     true_survival: dict[str, np.ndarray]
     true_individual_rmst_lift: np.ndarray | None = None
     true_periods_saved: dict[str, float] | None = None
+    true_arm_lift: dict[str, float] | None = None
     horizon: int = 12
     params: dict = field(default_factory=dict, repr=False)
 
@@ -170,8 +171,12 @@ def simulate_experiment(
     if dropout_hazard > 0 or dropout_depends_on_engagement:
         engagement = X[:, 0] if with_covariates else np.zeros(n)
         censor = _dropout(
-            rng, administrative, engagement, dropout_hazard,
-            dropout_depends_on_engagement, observation_window,
+            rng,
+            administrative,
+            engagement,
+            dropout_hazard,
+            dropout_depends_on_engagement,
+            observation_window,
         )
         informative = True
     else:
@@ -183,7 +188,13 @@ def simulate_experiment(
     weights = _price_schedule(price, treatment_discount, discount_periods, observation_window)
     observed_cause = np.where(event, cause, -1)
     frame = _to_frame(
-        arm, n_periods, event, cov_frame, weights, observed_cause, involuntary_hazard > 0,
+        arm,
+        n_periods,
+        event,
+        cov_frame,
+        weights,
+        observed_cause,
+        involuntary_hazard > 0,
         None if informative else censor,
     )
 
@@ -465,3 +476,81 @@ def _truth(
         "true_individual_rmst_lift": individual,
         "true_periods_saved": saved,
     }
+
+
+def simulate_multi_arm(
+    n: int = 40_000,
+    *,
+    effects: dict[str, float] | None = None,
+    control_label: str = "holdout",
+    horizon: int = 8,
+    observation_window: int = 12,
+    seed: int | None = 0,
+    **kwargs,
+) -> SimulatedExperiment:
+    """Simulate one experiment with several treatment arms against a shared control.
+
+    ``effects`` maps each treatment arm's name to its odds ratio on per-period
+    churn; ``1.0`` is a true null. Pass all ones to generate a global null, which
+    is what a multiple-comparisons correction has to survive.
+
+    ``true_arm_lift`` on the result gives the true incremental retained periods
+    for each arm, so a correction can be checked against the answer rather than
+    against a different run of itself.
+    """
+    effects = effects or {"offer_a": 0.90, "offer_b": 1.0, "offer_c": 1.0}
+    rng = np.random.default_rng(seed)
+    labels = [control_label, *effects]
+
+    frames, truths = [], {}
+    offset = 0
+    for index, label in enumerate(labels):
+        odds = 1.0 if index == 0 else effects[label]
+        # Each arm is generated as its own balanced two-arm experiment, of which only
+        # the treatment half is kept. Simpler than skewing treat_fraction towards one,
+        # which can leave a block with an empty arm and fail on the small end.
+        block = max(n // len(labels), 2)
+        arm_sim = simulate_experiment(
+            n=2 * block,
+            horizon=horizon,
+            observation_window=observation_window,
+            treatment_odds_ratio=odds,
+            treat_fraction=0.5,
+            seed=int(rng.integers(0, 2**31)),
+            **kwargs,
+        )
+        frame = arm_sim.frame.copy()
+        frame = frame[frame["variant"] == "treatment"]
+        frame["variant"] = label
+        frame["subscriber_id"] = frame["subscriber_id"] + offset
+        offset = int(frame["subscriber_id"].max()) + 1
+        frames.append(frame)
+        if index == 0:
+            control_rmst = np.concatenate(([1.0], arm_sim.true_survival["treatment"][:-1])).sum()
+        else:
+            truths[label] = (
+                np.concatenate(([1.0], arm_sim.true_survival["treatment"][:-1])).sum() - control_rmst
+            )
+
+    combined = pd.concat(frames, ignore_index=True)
+    panel = SubscriberPanel.from_periods(
+        combined,
+        subject="subscriber_id",
+        period="billing_period",
+        churned="churned",
+        arm="variant",
+        control=control_label,
+        covariates=[c for c in ("engagement", "plan", "tenure_bucket") if c in combined],
+        revenue="revenue",
+        potential_followup="potential_followup" if "potential_followup" in combined else None,
+    )
+    return SimulatedExperiment(
+        panel=panel,
+        frame=combined,
+        horizon=horizon,
+        true_rmst_lift=float(np.mean(list(truths.values()))),
+        true_ltv_lift=float("nan"),
+        true_survival={},
+        true_arm_lift=truths,
+        params={"n": n, "effects": effects},
+    )

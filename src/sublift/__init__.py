@@ -22,7 +22,7 @@ intervals stay valid when you look at them every day.
 """
 
 from .competing import CauseEffect, ChurnDecomposition, churn_decomposition
-from .datasets import SimulatedExperiment, simulate_experiment
+from .datasets import SimulatedExperiment, simulate_experiment, simulate_multi_arm
 from .diagnostics import (
     CensoringCheck,
     RandomizationCheck,
@@ -31,6 +31,7 @@ from .diagnostics import (
 )
 from .estimators import ArmSummary, LiftResult, incremental_ltv, retained_periods_lift
 from .exceptions import EstimationError, NotIdentifiedError, PanelError, SubliftError
+from .multiarm import ArmContrast, MultiArmResult, multi_arm_lift
 from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
 from .sequential import ConfidenceSequence, confidence_sequence
@@ -43,6 +44,9 @@ __all__ = [
     "SubscriberPanel",
     "incremental_ltv",
     "retained_periods_lift",
+    "multi_arm_lift",
+    "MultiArmResult",
+    "ArmContrast",
     "churn_decomposition",
     "ChurnDecomposition",
     "CauseEffect",
@@ -60,6 +64,7 @@ __all__ = [
     "QiniCurve",
     "uplift_scores",
     "simulate_experiment",
+    "simulate_multi_arm",
     "SimulatedExperiment",
     "SubliftError",
     "PanelError",

@@ -155,6 +155,26 @@ Its limitation is asymptotic: coverage is ~93% at 4,000 subscribers, nominal by 
 sublift warns below 5,000 rather than quietly running narrow. See
 [choosing an estimator](docs/choosing-an-estimator.md).
 
+### Several arms, one error rate
+
+```python
+print(sl.multi_arm_lift(panel, horizon=12, estimator="stratified", strata=["plan"]))
+```
+
+Testing three save offers against a holdout and reporting whichever looked best is one
+experiment with three chances to be wrong. With **four arms, none of which works**, declaring at
+least one a winner happens 13.0% of the time uncorrected against a nominal 5%; with the
+correction, 4.3%.
+
+The default is single-step **max-t**, which beats Bonferroni because the contrasts share a
+control arm and are therefore correlated at 0.5 — you can see that in the 13%, which is well
+below the 18.5% four independent tests would give. The saving is honest but modest: 1–3% on the
+critical value, so 2–6% fewer subscribers for the same power.
+
+`best()` returns `None` when nothing survives the correction, because in a null experiment some
+arm always has the largest point estimate. The two-arm estimators refuse to run on a multi-arm
+panel, so this is hard to do by accident. [More](docs/multi-arm.md).
+
 ### Censoring you know rather than estimate
 
 Under administrative censoring, a subscriber's potential follow-up is fixed the day they enter
@@ -360,6 +380,8 @@ each other — two independent routes to the same standard error.
 | `incremental_ltv` | the money question |
 | `retained_periods_lift` | the retention question |
 | `churn_decomposition` | voluntary vs involuntary |
+| `multi_arm_lift` | many arms vs one control, family-wise error control |
+| `SubscriberPanel.contrast` | pull one comparison out of a multi-arm panel |
 | `LiftResult.confidence_sequence` | anytime-valid interval |
 | `LiftResult.relative_ci` | interval for the % lift (delta method, not `ci / control`) |
 | `LiftResult.curves` | per-arm survival and cumulative value |
@@ -380,14 +402,16 @@ What sublift assumes, stated rather than buried:
   subscriber state violates this; `check_censoring` tests it.
 - **Baseline covariates only.** Adjusting for anything measured after assignment reintroduces
   the bias randomization removed; the panel constructors reject it.
-- **Two arms** at a time.
+- **Two arms** for the ordinary estimators; use `multi_arm_lift` for more.
 
 Roadmap:
 
 - [x] Efficient influence function for `adjusted`, giving it a confidence sequence
 - [x] Informative censoring: detected by `check_censoring`, partly corrected by adjustment and
       `censoring_covariates=`. Not solved — nothing solves it — and documented as such.
-- [ ] More than two arms, with multiple-comparison control across segments *(largest known gap)*
+- [x] More than two arms, with family-wise error control (`multi_arm_lift`)
+- [ ] Multiple-comparison control across *metrics and segments*, not just arms *(largest known gap)*
+- [ ] All-pairs comparisons; today every contrast is against the control
 - [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
 - [ ] Pauses, plan switches and win-backs in the panel and the simulator
 
@@ -398,6 +422,7 @@ Roadmap:
 | [Getting started](docs/getting-started.md) | From a warehouse table to a defensible number |
 | [Choosing an estimator](docs/choosing-an-estimator.md) | Which of the three, and why |
 | [Monitoring a running test](docs/monitoring.md) | Why peeking breaks a p-value |
+| [Testing several arms](docs/multi-arm.md) | Many offers, one holdout, one error rate |
 | [Voluntary vs involuntary churn](docs/competing-risks.md) | Competing risks, and why the split is exact |
 | [Assumptions](docs/assumptions.md) | When sublift is wrong — read this one |
 | [Method](docs/method.md) | The estimand, the influence functions, the references |
