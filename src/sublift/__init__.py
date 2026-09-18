@@ -33,7 +33,12 @@ from .estimators import ArmSummary, LiftResult, incremental_ltv, retained_period
 from .exceptions import EstimationError, NotIdentifiedError, PanelError, SubliftError
 from .family import CorrectedFamily, FamilyMember, correct_family
 from .multiarm import ArmContrast, MultiArmResult, multi_arm_lift
-from .occupancy import occupancy_lift
+from .occupancy import (
+    LapseCause,
+    OccupancyDecomposition,
+    occupancy_decomposition,
+    occupancy_lift,
+)
 from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
 from .review import ExperimentReview, Finding, review
@@ -49,6 +54,9 @@ __all__ = [
     "incremental_ltv",
     "retained_periods_lift",
     "occupancy_lift",
+    "occupancy_decomposition",
+    "OccupancyDecomposition",
+    "LapseCause",
     "review",
     "ExperimentReview",
     "Finding",

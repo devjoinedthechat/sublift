@@ -109,3 +109,55 @@ def test_frame_and_summary_cover_every_arm(sim):
     text = res.summary()
     for label in frame["arm"]:
         assert label in text
+
+
+# ------------------------------------------------------------------- all pairs
+
+
+def test_all_pairs_tests_every_combination(sim):
+    vs_control = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted")
+    all_pairs = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted", comparisons="all-pairs")
+    assert len(vs_control.contrasts) == 3
+    assert len(all_pairs.contrasts) == 6  # 4 arms choose 2
+    labels = {c.label for c in all_pairs.contrasts}
+    assert "offer_b vs offer_a" in labels
+
+
+def test_all_pairs_costs_a_wider_interval(sim):
+    """A bigger family is a bigger correction; that is the whole point."""
+    vs_control = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted")
+    all_pairs = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted", comparisons="all-pairs")
+    assert all_pairs.critical_value > vs_control.critical_value
+
+
+def test_all_pairs_correlation_is_lower_than_shared_control(sim):
+    """Contrasts against a common control share an arm; mixed pairs mostly do not."""
+    vs_control = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted")
+    all_pairs = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted", comparisons="all-pairs")
+
+    def mean_off_diagonal(result):
+        k = len(result.contrasts)
+        return float(result.correlation[np.triu_indices(k, 1)].mean())
+
+    assert mean_off_diagonal(vs_control) > mean_off_diagonal(all_pairs)
+
+
+def test_all_pairs_recovers_the_differences_between_arms(sim):
+    result = multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted", comparisons="all-pairs")
+    by_label = {c.label: c for c in result.contrasts}
+    expected = sim.true_arm_lift["offer_a"] - sim.true_arm_lift["offer_b"]
+    contrast = by_label["offer_b vs offer_a"]
+    assert abs(-contrast.estimate - expected) < 4 * contrast.se
+
+
+def test_all_pairs_works_stratified(sim):
+    result = multi_arm_lift(
+        sim.panel, horizon=8, estimator="stratified", strata=STRATA, comparisons="all-pairs"
+    )
+    assert len(result.contrasts) == 6
+    assert all(c.se > 0 for c in result.contrasts)
+
+
+def test_an_unknown_comparison_mode_is_rejected(sim):
+    with pytest.raises(ValueError, match="comparisons must be"):
+        multi_arm_lift(sim.panel, horizon=8, estimator="unadjusted", comparisons="some-pairs")

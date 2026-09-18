@@ -237,3 +237,105 @@ def test_it_refuses_without_potential_follow_up(returning):
     )
     with pytest.raises(NotIdentifiedError, match="potential_followup"):
         occupancy_lift(stripped, horizon=8)
+
+
+# ------------------------------------------------------- covariate adjustment
+
+
+def test_covariate_adjusted_occupancy_recovers_the_truth(returning):
+    res = occupancy_lift(returning.panel, horizon=8, covariates=["engagement", "plan", "tenure_bucket"])
+    assert "adjusted" in res.estimator
+    assert abs(res.estimate - returning.true_occupancy_lift) < 3 * res.se
+
+
+def test_adjustment_needs_no_large_sample_caveat(returning):
+    """Each period is a mean, not a product-limit, so the influence function is exact."""
+    small = returning.panel.subset(np.arange(returning.panel.n_subjects) < 2000)
+    res = occupancy_lift(small, horizon=8, covariates=["engagement", "plan"], allow_extrapolation=True)
+    assert res.inference == "influence"
+    assert res.confidence_sequence().radius > 0
+
+
+def test_strata_and_covariates_are_mutually_exclusive(returning):
+    with pytest.raises(ValueError, match="not both"):
+        occupancy_lift(returning.panel, horizon=8, strata=["plan"], covariates=["engagement"])
+
+
+# ---------------------------------------------------------- lapse decomposition
+
+
+def spell_panel(seed=3, n=20_000):
+    """Subscribers who leave for different reasons at different times, and come back."""
+    rng = np.random.default_rng(seed)
+    base = pd.Timestamp("2025-01-01")
+    rows = []
+    for i in range(n):
+        arm = i % 2
+        period = 1
+        while period <= 14:
+            length = rng.geometric(0.10 if arm else 0.14)
+            end = min(period + length - 1, 14)
+            closed = period + length - 1 <= 14
+            rows.append(
+                {
+                    "uid": i,
+                    "variant": "treat" if arm else "ctrl",
+                    "entered": base,
+                    "start": base + pd.DateOffset(months=period - 1),
+                    "end": base + pd.DateOffset(months=end - 1) if closed else pd.NaT,
+                    "why": (rng.choice(["cancelled", "payment_failed"], p=[0.75, 0.25]) if closed else None),
+                }
+            )
+            if not closed:
+                break
+            period = end + 1 + rng.geometric(0.30)
+    return SubscriberPanel.from_spells(
+        pd.DataFrame(rows),
+        subject="uid",
+        arm="variant",
+        assigned_at="entered",
+        spell_start="start",
+        spell_end="end",
+        observed_through="2026-02-01",
+        control="ctrl",
+        spell_cause="why",
+    )
+
+
+@pytest.fixture(scope="module")
+def lapsing():
+    return spell_panel()
+
+
+def test_lapse_causes_sum_to_the_occupancy_effect(lapsing):
+    """The same identity as the first-spell split, over a horizon where people return."""
+    from sublift import occupancy_decomposition
+
+    total = occupancy_lift(lapsing, horizon=10)
+    split = occupancy_decomposition(lapsing, horizon=10)
+    assert split.total == pytest.approx(total.estimate, rel=1e-9)
+    assert sum(c.estimate for c in split.causes) == pytest.approx(split.total, rel=1e-12)
+
+
+def test_the_split_matches_how_the_lapses_were_generated(lapsing):
+    from sublift import occupancy_decomposition
+
+    split = occupancy_decomposition(lapsing, horizon=10)
+    by_label = {c.label: c for c in split.causes}
+    assert set(by_label) == {"cancelled", "payment_failed"}
+    # Three quarters of endings were cancellations, so most of the effect runs through them.
+    assert 0.6 < split.share(by_label["cancelled"]) < 0.9
+
+
+def test_a_subscriber_can_lapse_for_different_reasons_over_the_horizon(lapsing):
+    """What the first-spell decomposition structurally cannot represent."""
+    grid = lapsing.lapsed_cause
+    seen = [set(row[row >= 0].tolist()) for row in grid]
+    assert any(len(s) > 1 for s in seen)
+
+
+def test_a_panel_without_lapse_causes_says_what_to_do(returning):
+    from sublift import occupancy_decomposition
+
+    with pytest.raises(PanelError, match="spell_cause"):
+        occupancy_decomposition(returning.panel, horizon=8)

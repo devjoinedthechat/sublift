@@ -90,8 +90,35 @@ are the same row, and the estimator would read every censored subscriber as laps
 `from_spells` records it from the assignment date and the data cut, so this is automatic; the
 estimator refuses rather than guessing if it is missing.
 
+## Why they lapsed, over a horizon where they come back
+
+```python
+panel = sl.SubscriberPanel.from_spells(..., spell_cause="churn_reason")
+print(sl.occupancy_decomposition(panel, horizon=12))
+```
+
+`churn_decomposition` attributes a subscriber to one cause, because it only ever sees them end
+once. Over a horizon in which people leave and return, one subscriber can lapse for different
+reasons at different times — cancelled in the spring, card failed in the autumn — and the
+periods belong to whichever ending they were living under at the time.
+
+The split is exact for the same reason as the survival one: in every period a subscriber is
+either paying or not, and if not, exactly one ending is the most recent. So
+`horizon = A + Σ_j L_j` and the contrast decomposes with no residual.
+
+## Covariate adjustment
+
+`occupancy_lift(..., covariates=[...])` fits an outcome model per period and augments it with the
+observed residuals. Under randomization the augmentation's expectation is the estimation error
+of the model, so a poor model widens the interval and does not move the estimate.
+
+Unlike the covariate-adjusted *survival* estimator, this one carries no large-sample caveat:
+each period is an ordinary mean rather than a product-limit, so the influence function is exact
+in finite samples.
+
 ## Limitations
 
-- Two arms, and `unadjusted` or `strata=` only. No covariate-adjusted version yet.
+- Two arms.
 - No separate model for *why* a subscriber returned; a win-back is just a resumed spell.
-- Competing risks (`churn_decomposition`) operates on the first-spell view only.
+- A lapse is attributed to the most recent ending, which is the right answer when endings are
+  distinct events and a simplification when a subscriber's state is genuinely ambiguous.

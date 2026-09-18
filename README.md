@@ -413,6 +413,29 @@ chunk sizes of 7, 100,000, and unbounded.
 `tests/test_scale.py` asserts these budgets, because reintroducing an `(n, horizon)` temporary in
 a hot path is easy and no correctness test would catch it.
 
+## Families the library can't see
+
+`multi_arm_lift` corrects across arms and `segment_scan` across segments, but only you know
+what you actually looked at. `correct_family` takes any set of results that expose an influence
+function and corrects across them:
+
+```python
+sl.correct_family({
+    "retained periods": sl.retained_periods_lift(panel, horizon=12, estimator="unadjusted"),
+    "LTV":              sl.incremental_ltv(panel, horizon=12, price=12.0, estimator="unadjusted"),
+})
+```
+
+This is where max-t earns the most. With a flat price, LTV and retained periods are the same
+statistic scaled — they correlate at **1.00** — and max-t prices them as the one comparison they
+are, 16% narrower than Bonferroni. Three arms over four segments is twelve comparisons, not
+three plus four; assemble the family and pass it.
+
+`multi_arm_lift(..., comparisons="all-pairs")` tests every pair rather than every arm against
+the control, for when the arms are alternatives rather than variations on a holdout. Six
+comparisons instead of three, correlation dropping from 0.51 to 0.14 as the shared control
+disappears, and a correspondingly wider critical value.
+
 ## Why not just…
 
 | | has | missing |
@@ -500,6 +523,8 @@ each other — two independent routes to the same standard error.
 | `incremental_ltv` | the money question |
 | `retained_periods_lift` | the retention question |
 | `occupancy_lift` | periods paid for, when subscribers return |
+| `occupancy_decomposition` | those periods split by why they lapsed |
+| `correct_family` | correct across any family you assembled yourself |
 | `churn_decomposition` | voluntary vs involuntary |
 | `multi_arm_lift` | many arms vs one control, family-wise error control |
 | `segment_scan` | effects by segment, without manufacturing findings |
@@ -533,11 +558,14 @@ Roadmap:
       `censoring_covariates=`. Not solved — nothing solves it — and documented as such.
 - [x] More than two arms, with family-wise error control (`multi_arm_lift`)
 - [x] Multiplicity across segments (`segment_scan`), with a scale-artefact diagnostic
-- [ ] Multiplicity across *metrics*, and across arms × segments together *(largest known gap)*
-- [ ] All-pairs comparisons; today every contrast is against the control
+- [x] Multiplicity across metrics, and arms × segments (`correct_family`)
+- [x] All-pairs comparisons (`comparisons="all-pairs"`)
 - [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
 - [x] Win-backs and pauses (`from_spells`, `occupancy_lift`)
-- [ ] Covariate-adjusted occupancy, and competing risks beyond the first spell
+- [x] Covariate-adjusted occupancy, and competing risks beyond the first spell
+- [ ] Informative censoring beyond covariate adjustment *(largest known gap — see
+      [assumptions](docs/assumptions.md))*
+- [ ] Multiplicity across horizons, and sequential monitoring of a whole family at once
 
 ## Documentation
 

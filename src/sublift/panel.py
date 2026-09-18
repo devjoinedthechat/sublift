@@ -82,6 +82,8 @@ class SubscriberPanel:
     potential_followup: np.ndarray | None = field(default=None, repr=False)
     active: np.ndarray | None = field(default=None, repr=False)
     flat_revenue: np.ndarray | None = field(default=None, repr=False)
+    lapsed_cause: np.ndarray | None = field(default=None, repr=False)
+    lapsed_labels: tuple[str, ...] = ()
 
     # ------------------------------------------------------------------ build
 
@@ -385,6 +387,7 @@ class SubscriberPanel:
         control: object | None = None,
         covariates: Sequence[str] | None = None,
         price: str | float | None = None,
+        spell_cause: str | None = None,
     ) -> SubscriberPanel:
         """Build from one row per subscriber-*spell*, for subscriptions that come back.
 
@@ -476,6 +479,18 @@ class SubscriberPanel:
         observable = np.arange(1, width + 1)[None, :] <= potential[:, None]
         active = active & observable
 
+        lapsed_cause, lapsed_labels = None, ()
+        if spell_cause is not None:
+            lapsed_cause, lapsed_labels = _lapse_grid(
+                work[spell_cause],
+                index,
+                end_period.to_numpy(dtype=np.int64),
+                open_spell.to_numpy(dtype=bool),
+                active,
+                len(subjects),
+                width,
+            )
+
         # First-spell survival view, so the ordinary estimators still apply.
         first_end = (
             pd.DataFrame({"i": index, "start": start_period, "end": end_period, "open": open_spell})
@@ -521,6 +536,8 @@ class SubscriberPanel:
             flat_revenue=per_subject,
             potential_followup=potential,
             active=active,
+            lapsed_cause=lapsed_cause,
+            lapsed_labels=lapsed_labels,
         )
 
     # --------------------------------------------------------------- inspect
@@ -651,6 +668,8 @@ class SubscriberPanel:
             ),
             active=self.active[idx] if self.active is not None else None,
             flat_revenue=(self.flat_revenue[idx] if self.flat_revenue is not None else None),
+            lapsed_cause=self.lapsed_cause[idx] if self.lapsed_cause is not None else None,
+            lapsed_labels=self.lapsed_labels,
         )
 
     @property
@@ -717,6 +736,8 @@ class SubscriberPanel:
             ),
             active=self.active[idx] if self.active is not None else None,
             flat_revenue=(self.flat_revenue[idx] if self.flat_revenue is not None else None),
+            lapsed_cause=self.lapsed_cause[idx] if self.lapsed_cause is not None else None,
+            lapsed_labels=self.lapsed_labels,
         )
 
     def describe(self) -> pd.DataFrame:
@@ -941,3 +962,41 @@ def stratum_codes(
             remainder //= len(names)
         labels.append(sep.join(reversed(parts)))
     return dense.astype(np.int64), np.array(labels, dtype=object)
+
+
+def _lapse_grid(
+    causes: pd.Series,
+    subject_index: np.ndarray,
+    end_period: np.ndarray,
+    open_spell: np.ndarray,
+    active: np.ndarray,
+    n_subjects: int,
+    width: int,
+):
+    """For every period a subscriber was not paying, why: the most recent ending.
+
+    Built by scattering each closed spell's cause at the period after it ended and
+    carrying it forward with a forward-fill, so a subscriber who cancelled in March
+    and had their card fail in August is attributed to cancellation for the spring
+    and to the payment failure afterwards. Periods before a subscriber has ever
+    paid carry ``-1``: nothing has ended yet, so nothing can be blamed.
+    """
+    values = causes.reset_index(drop=True)
+    closed = (~open_spell) & values.notna().to_numpy()
+    labels = tuple(sorted({str(v) for v in values[closed].unique()}))
+    lookup = {label: i for i, label in enumerate(labels)}
+
+    grid = np.full((n_subjects, width), -1, dtype=np.int16)
+    as_str = values.astype(str).to_numpy()
+    lapse_at = end_period  # the spell's last paid period; they are gone from the next
+    for row in np.flatnonzero(closed):
+        period = lapse_at[row]
+        if period < width:
+            grid[subject_index[row], period] = lookup[as_str[row]]
+
+    # Carry the most recent ending forward, then blank it wherever they are paying.
+    filled = np.where(grid >= 0, grid, np.nan).astype(float)
+    forward = pd.DataFrame(filled).ffill(axis=1).to_numpy()
+    carried = np.where(np.isnan(forward), -1, forward).astype(np.int16)
+    carried[active] = -1
+    return carried, labels

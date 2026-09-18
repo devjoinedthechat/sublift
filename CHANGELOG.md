@@ -10,6 +10,28 @@ slipped into a patch release.
 
 ## [Unreleased]
 
+### Added
+- **`correct_family`**: correct across any set of results that expose an influence function.
+  `multi_arm_lift` handles arms and `segment_scan` handles segments, but only the analyst knows
+  what they actually looked at — three arms over four segments is twelve comparisons, not three
+  plus four. This is also where max-t earns the most: with a flat price, LTV and retained periods
+  correlate at 1.00 because they are the same statistic scaled, and max-t prices them as the one
+  comparison they are, 16% narrower than Bonferroni.
+- **`multi_arm_lift(comparisons="all-pairs")`**: every pair of arms rather than every arm against
+  the control, for when the arms are alternatives rather than variations on a holdout. Six
+  comparisons instead of three at four arms, with the mean correlation falling from 0.51 to 0.14
+  as the shared control disappears. Family-wise error control validated at both settings.
+- **`occupancy_lift(covariates=[...])`**: covariate-adjusted occupancy, per-period outcome models
+  augmented by their own residuals. Carries no large-sample caveat, unlike the adjusted survival
+  estimator: each period is an ordinary mean rather than a product-limit, so the influence
+  function is exact in finite samples.
+- **`occupancy_decomposition`** and `from_spells(spell_cause=...)`: competing risks beyond the
+  first spell. Over a horizon where subscribers return, one person can lapse for different
+  reasons at different times, and the periods belong to whichever ending they were living under.
+  Exact for the same reason as the survival split — in every period a subscriber is either paying
+  or living under exactly one most-recent ending — so the causes sum to the total with no
+  residual.
+
 ### Performance
 - **Runs on a real subscriber base.** A million subscribers over twelve billing periods: every
   estimator under two seconds, and `review` — the checks plus both metrics plus the

@@ -195,6 +195,7 @@ def multi_arm_lift(
     price=None,
     alpha: float = 0.05,
     correction: str = "max-t",
+    comparisons: str = "vs-control",
     allow_extrapolation: bool = False,
     seed: int = 0,
 ) -> MultiArmResult:
@@ -202,6 +203,12 @@ def multi_arm_lift(
 
     Parameters
     ----------
+    comparisons
+        ``"vs-control"`` (default) tests each treatment arm against the control.
+        ``"all-pairs"`` tests every pair of arms, which is what you want when the
+        arms are alternatives rather than variations on a holdout -- three
+        pricing tiers, say -- and which grows the family from ``k`` comparisons
+        to ``k(k+1)/2``, so it should be asked for rather than assumed.
     correction
         ``"max-t"`` (default) calibrates the critical value against the estimated
         correlation between contrasts, which share a control arm and are
@@ -214,6 +221,7 @@ def multi_arm_lift(
     """
     if correction not in _CORRECTIONS:
         raise ValueError(f"correction must be one of {_CORRECTIONS}, got {correction!r}.")
+    pairs = _pairs(panel.n_arms, comparisons)
     if estimator not in ("unadjusted", "stratified"):
         raise ValueError(
             "multi_arm_lift supports estimator='unadjusted' and 'stratified'. The adjusted "
@@ -233,13 +241,15 @@ def multi_arm_lift(
     if estimator == "stratified":
         if not strata:
             raise ValueError("estimator='stratified' needs strata=[...].")
-        values, psi = _stratified_arms(panel, horizon, weights, list(strata), allow_extrapolation, notes)
+        values, arm_psi, stratified = _stratified_arms(
+            panel, horizon, weights, list(strata), allow_extrapolation, notes
+        )
     else:
-        values, psi = _unadjusted_arms(panel, horizon, weights, allow_extrapolation)
+        values, arm_psi, stratified = _unadjusted_arms(panel, horizon, weights, allow_extrapolation)
 
-    k = panel.n_arms - 1
+    estimates, psi = _contrast_rows(pairs, values, arm_psi, stratified)
+    k = len(pairs)
     n = panel.n_subjects
-    estimates = np.array([values[a] - values[0] for a in range(1, panel.n_arms)])
     cov = (psi @ psi.T) / (n**2)
     se = np.sqrt(np.diag(cov))
     z_scores = np.divide(estimates, se, out=np.zeros_like(estimates), where=se > 0)
@@ -252,23 +262,20 @@ def multi_arm_lift(
 
     contrasts = [
         ArmContrast(
-            label=panel.arm_labels[a],
+            label=(panel.arm_labels[a] if b == 0 else f"{panel.arm_labels[a]} vs {panel.arm_labels[b]}"),
             n=int((panel.arm == a).sum()),
             value=values[a],
-            estimate=float(estimates[a - 1]),
-            se=float(se[a - 1]),
-            ci=(
-                float(estimates[a - 1] - critical * se[a - 1]),
-                float(estimates[a - 1] + critical * se[a - 1]),
-            ),
+            estimate=float(estimates[i]),
+            se=float(se[i]),
+            ci=(float(estimates[i] - critical * se[i]), float(estimates[i] + critical * se[i])),
             marginal_ci=(
-                float(estimates[a - 1] - marginal * se[a - 1]),
-                float(estimates[a - 1] + marginal * se[a - 1]),
+                float(estimates[i] - marginal * se[i]),
+                float(estimates[i] + marginal * se[i]),
             ),
-            p_value=float(raw_p[a - 1]),
-            adjusted_p_value=float(adjusted_p[a - 1]),
+            p_value=float(raw_p[i]),
+            adjusted_p_value=float(adjusted_p[i]),
         )
-        for a in range(1, panel.n_arms)
+        for i, (a, b) in enumerate(pairs)
     ]
 
     return MultiArmResult(
@@ -332,27 +339,34 @@ def _schedule(price, horizon):
     return arr[:horizon]
 
 
+def _pairs(n_arms: int, comparisons: str) -> list[tuple[int, int]]:
+    """Which arm pairs make up the family."""
+    if comparisons == "vs-control":
+        return [(a, 0) for a in range(1, n_arms)]
+    if comparisons == "all-pairs":
+        return [(b, a) for a in range(n_arms) for b in range(a + 1, n_arms)]
+    raise ValueError(f"comparisons must be 'vs-control' or 'all-pairs', got {comparisons!r}.")
+
+
 def _unadjusted_arms(panel, horizon, weights, allow_extrapolation):
-    """Per-arm values, and one influence row per contrast on the whole-sample scale."""
+    """Per-arm values and per-arm influence, on the whole-sample scale."""
     n = panel.n_subjects
-    values, arm_influence = {}, {}
+    values, arm_psi = {}, np.zeros((panel.n_arms, n))
     for a in range(panel.n_arms):
         mask = panel.arm == a
         _, value, inf, _ = _fit_arm(panel, mask, horizon, weights[a], allow_extrapolation)
         values[a] = value
-        arm_influence[a] = (mask, inf, mask.sum() / n)
-
-    psi = np.zeros((panel.n_arms - 1, n))
-    ctrl_mask, ctrl_inf, ctrl_share = arm_influence[0]
-    for a in range(1, panel.n_arms):
-        mask, inf, share = arm_influence[a]
-        psi[a - 1, mask] = inf / share
-        psi[a - 1, ctrl_mask] = -ctrl_inf / ctrl_share
-    return values, psi
+        arm_psi[a, mask] = inf / (mask.sum() / n)
+    return values, arm_psi, None
 
 
 def _stratified_arms(panel, horizon, weights, strata, allow_extrapolation, notes):
-    """Post-stratified contrasts, carrying both influence terms as in the two-arm case."""
+    """The same, post-stratified, plus what the stratum-share term needs.
+
+    The within-stratum influence is per arm, but the term for the error in the
+    stratum shares depends on the *contrast*, so it is left to be added once the
+    pairs are known -- which is what lets all-pairs reuse this unchanged.
+    """
     if panel.covariates is None:
         raise PanelError("Panel carries no covariates; rebuild it with covariates=[...].")
     missing = [c for c in strata if c not in panel.covariates.columns]
@@ -360,33 +374,26 @@ def _stratified_arms(panel, horizon, weights, strata, allow_extrapolation, notes
         raise PanelError(f"Strata column(s) {missing} not in the panel's covariates.")
 
     codes, levels = stratum_codes(panel.covariates, strata)
-
     n = panel.n_subjects
     n_arms = panel.n_arms
-    psi = np.zeros((n_arms - 1, n))
-    stratum_delta = np.zeros((n_arms - 1, len(levels)))
+    arm_psi = np.zeros((n_arms, n))
     stratum_value = np.zeros((n_arms, len(levels)))
     shares = np.zeros(len(levels))
     kept = np.zeros(n, dtype=bool)
 
-    for s in range(len(levels)):
-        in_s = codes == s
+    for s_index in range(len(levels)):
+        in_s = codes == s_index
         sizes = {a: int((in_s & (panel.arm == a)).sum()) for a in range(n_arms)}
         if min(sizes.values()) < 2:
-            notes.append(f"stratum {levels[s]!r} dropped: smallest arm had {min(sizes.values())}")
+            notes.append(f"stratum {levels[s_index]!r} dropped: smallest arm had {min(sizes.values())}")
             continue
         kept |= in_s
-        shares[s] = in_s.sum()
+        shares[s_index] = in_s.sum()
         for a in range(n_arms):
             mask = in_s & (panel.arm == a)
             _, value, inf, _ = _fit_arm(panel, mask, horizon, weights[a], allow_extrapolation)
-            stratum_value[a, s] = value
-            contribution = inf / (sizes[a] / in_s.sum())
-            if a == 0:
-                psi[:, mask] = -contribution[None, :]
-            else:
-                psi[a - 1, mask] = contribution
-        stratum_delta[:, s] = stratum_value[1:, s] - stratum_value[0, s]
+            stratum_value[a, s_index] = value
+            arm_psi[a, mask] = inf / (sizes[a] / in_s.sum())
 
     total = shares.sum()
     if total == 0:
@@ -396,6 +403,18 @@ def _stratified_arms(panel, horizon, weights, strata, allow_extrapolation, notes
 
     pi = shares / total
     values = {a: float(stratum_value[a] @ pi) for a in range(n_arms)}
-    deltas = stratum_delta @ pi
-    psi = psi[:, kept] + (stratum_delta[:, codes[kept]] - deltas[:, None])
-    return values, psi
+    return values, arm_psi, (stratum_value, pi, codes, kept)
+
+
+def _contrast_rows(pairs, values, arm_psi, stratified):
+    """Estimates and influence rows for each pair, adding the stratum-share term."""
+    estimates = np.array([values[a] - values[b] for a, b in pairs])
+    psi = np.vstack([arm_psi[a] - arm_psi[b] for a, b in pairs])
+    if stratified is None:
+        return estimates, psi
+
+    stratum_value, pi, codes, kept = stratified
+    deltas = np.vstack([stratum_value[a] - stratum_value[b] for a, b in pairs])
+    combined = deltas @ pi
+    psi = psi[:, kept] + (deltas[:, codes[kept]] - combined[:, None])
+    return combined, psi

@@ -598,3 +598,48 @@ def test_time_to_first_cancellation_overstates_the_win_when_people_come_back():
     assert abs(busy_occ - busy_truth) < 0.05 * busy_truth
     assert busy_surv > busy_truth * 1.25, "first-spell view should be well over the truth"
     assert abs(busy_surv - quiet_surv) < 0.05 * quiet_surv, "and barely move at all"
+
+
+def test_all_pairs_controls_the_error_rate_over_a_bigger_family():
+    """Four arms all-pairs is six comparisons, and the correction has to cover all six."""
+    reps = 200
+    false_families = {"none": 0, "max-t": 0}
+    for r in range(reps):
+        sim = simulate_multi_arm(n=16_000, effects={"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}, seed=40_000 + r)
+        for correction in false_families:
+            res = multi_arm_lift(
+                sim.panel,
+                horizon=8,
+                estimator="unadjusted",
+                comparisons="all-pairs",
+                correction=correction,
+            )
+            false_families[correction] += any(c.significant for c in res.contrasts)
+
+    rate = {c: false_families[c] / reps for c in false_families}
+    assert rate["none"] > 0.12, f"uncorrected all-pairs rate {rate['none']:.1%}"
+    assert rate["max-t"] <= 0.08, f"max-t did not control FWER: {rate['max-t']:.1%}"
+
+
+def test_covariate_adjusted_occupancy_is_unbiased_and_covers():
+    reps = 200
+    ests, ses, covered = [], [], 0
+    truth = None
+    for r in range(reps):
+        sim = simulate_experiment(
+            n=20_000,
+            horizon=8,
+            observation_window=13,
+            seed=5000 + r,
+            treatment_odds_ratio=0.85,
+            winback_hazard=0.10,
+        )
+        res = occupancy_lift(sim.panel, horizon=8, covariates=["engagement", "plan", "tenure_bucket"])
+        ests.append(res.estimate)
+        ses.append(res.se)
+        covered += res.ci[0] <= sim.true_occupancy_lift <= res.ci[1]
+        truth = sim.true_occupancy_lift
+
+    e = np.array(ests)
+    assert abs(e.mean() - truth) < 3.5 * e.std(ddof=1) / np.sqrt(reps)
+    assert 0.92 <= covered / reps <= 0.99, f"coverage {covered / reps:.1%}"
