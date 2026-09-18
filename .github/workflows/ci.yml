@@ -45,7 +45,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -q --cov=sublift --cov-report=term-missing --cov-report=xml
       - if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.xml
@@ -85,7 +85,7 @@ jobs:
       - run: pip install build twine
       - run: python -m build
       - run: twine check dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
