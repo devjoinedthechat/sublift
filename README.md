@@ -191,190 +191,52 @@ Its limitation is asymptotic: coverage is ~93% at 4,000 subscribers, nominal by 
 sublift warns below 5,000 rather than quietly running narrow. See
 [choosing an estimator](docs/choosing-an-estimator.md).
 
-### Several arms, one error rate
+### And then the questions that follow
 
-```python
-print(sl.multi_arm_lift(panel, horizon=12, estimator="stratified", strata=["plan"]))
-```
+Each of these has a page in [docs/](docs/) that explains the method; here is what they are for
+and the number that makes the case.
 
-Testing three save offers against a holdout and reporting whichever looked best is one
-experiment with three chances to be wrong. With **four arms, none of which works**, declaring at
-least one a winner happens 13.0% of the time uncorrected against a nominal 5%; with the
-correction, 4.3%.
+**[Several arms, one error rate](docs/multi-arm.md)** — `multi_arm_lift`. Testing three save
+offers and reporting the best is one experiment with three chances to be wrong: with four null
+arms, declaring a winner happens **13.0%** of the time uncorrected against a nominal 5%. The
+default correction is max-t, which beats Bonferroni because contrasts sharing a control arm
+correlate at 0.5. `comparisons="all-pairs"` when the arms are alternatives rather than variations
+on a holdout.
 
-The default is single-step **max-t**, which beats Bonferroni because the contrasts share a
-control arm and are therefore correlated at 0.5 — you can see that in the 13%, which is well
-below the 18.5% four independent tests would give. The saving is honest but modest: 1–3% on the
-critical value, so 2–6% fewer subscribers for the same power.
+**[Subscribers who come back](docs/win-backs.md)** — `from_spells`, `occupancy_lift`. People
+cancel and resubscribe, or pause over the summer. Time-to-first-cancellation cannot see any of
+it, and the error runs the wrong way: the subscribers written off as lost are disproportionately
+in the *control* arm, so at a 20% win-back rate it overstates the win by **44%**.
+`occupancy_decomposition` splits those periods by why each lapse happened.
 
-`best()` returns `None` when nothing survives the correction, because in a null experiment some
-arm always has the largest point estimate. The two-arm estimators refuse to run on a multi-arm
-panel, so this is hard to do by accident. [More](docs/multi-arm.md).
+**[Slicing the base](docs/segments.md)** — `segment_scan`. "It worked great for annual
+subscribers on iOS" is the most common false finding. Slice a **null** experiment eight ways and
+per-comparison tests report a segment that differs **26.4%** of the time; this reports one 5.2%
+of the time. It also catches the trap that a *uniform* odds ratio produces genuinely different
+retained periods per segment, and labels that a scale artefact rather than a mechanism.
 
-### Subscribers who come back
+**[Monitoring a running test](docs/monitoring.md)** — `result.confidence_sequence()`. A
+fixed-sample interval is only a 95% interval if you look once; checked at sixteen interim points
+its false-positive rate is **26.4%**. A confidence sequence is valid at every sample size
+simultaneously, so you may stop whenever you like, including because of what you just saw. All
+three estimators support it, which is why the influence functions are derived by hand.
 
-```python
-panel = sl.SubscriberPanel.from_spells(df, ...)   # one row per subscriber-SPELL
-sl.occupancy_lift(panel, horizon=12, strata=["plan"])
-```
+**[Voluntary vs involuntary churn](docs/competing-risks.md)** — `churn_decomposition`. A fifth to
+two fifths of subscription churn is a failed card, not a decision, and a save offer cannot act on
+it. The split is an exact identity, not an attribution, so the causes sum to the headline with no
+residual — and it surfaces effects a single hazard cannot express, such as retention *increasing*
+exposure to payment failure.
 
-People cancel and resubscribe, or pause over the summer. Time-to-first-cancellation records a
-subscriber who paid for periods 1–3 and 6–12 as churning at period 3 — and the error runs the
-*wrong way*. The subscribers written off as lost are disproportionately in the **control** arm,
-so ignoring returns **overstates** your win:
+**Diagnostics that run whether you ask or not** — `check_randomization` tests sample ratio
+mismatch on every estimate, because a broken assignment invalidates everything downstream and
+fails silently. `check_censoring` tests whether censoring is really administrative, and
+[`censoring_sensitivity`](docs/assumptions.md#2-censoring-is-administrative) bounds the part no
+test can reach: *how far* independent censoring would have to fail before the conclusion changes.
 
-| win-back rate | true effect | time-to-first-cancellation |
-|---|---|---|
-| 0% | +0.2585 | +0.2609 |
-| 10% | +0.2149 | +0.2609 (21% high) |
-| 20% | +0.1814 | +0.2609 (**44% high**) |
-
-The right column does not move: the first-spell estimate structurally cannot see returns.
-`occupancy_lift` measures expected periods *paid for*, which does not care whether they came in
-one run or three, and tracks the truth at every rate. On single-spell data the two agree within
-a fraction of a standard error. [More](docs/win-backs.md).
-
-### Slicing the base, honestly
-
-```python
-scan = sl.segment_scan(panel, by=["plan", "tenure_bucket", "engagement_bucket"], horizon=12)
-scan.credible_segments()
-```
-
-"It didn't work overall, but it worked great for annual subscribers on iOS" is the most common
-way a retention experiment produces a false finding. Slice a **null** experiment eight ways and
-per-comparison tests report a segment that "differs" **26.4%** of the time; `segment_scan`
-reports one 5.2% of the time, against a nominal 5%.
-
-It asks the questions in order: is there any real variation (Cochran's Q, Holm-corrected across
-dimensions), does it work here (simultaneous intervals), and does it work *differently* here —
-the claim a segment story actually makes, which has its own wider uncertainty.
-
-It also catches a trap that is easy to miss. A **uniform** odds ratio produces genuinely
-different numbers of retained periods per segment, because segments churning faster have more to
-save. So heterogeneity is tested on two scales — retained periods and the churn odds ratio — and
-variation in the first with none in the second is reported as a scale artefact, not a mechanism.
-[More](docs/segments.md).
-
-### Censoring you know rather than estimate
-
-Under administrative censoring, a subscriber's potential follow-up is fixed the day they enter
-the experiment, by the distance from their assignment date to the data cut. That is known for
-**everyone** — including subscribers who churned in period one, long before the cut.
-
-`from_spans` records it, so the censoring distribution used by `adjusted` is computed exactly
-instead of inferred from whoever happened to survive. Panels built from period counts fall back
-on reverse Kaplan–Meier, and sublift tells you which one it used rather than leaving it implicit.
-
-### Anytime-valid monitoring
-
-```python
-result.confidence_sequence(n_target=50_000)
-# anytime-valid 95% CS at n=40,000: [-13.8343, -10.5347] (excludes 0); 1.55x the fixed-sample width
-```
-
-A confidence sequence is valid *simultaneously at every sample size*: across unlimited looks,
-the probability it ever excludes the truth is at most α. Stop whenever you like, including
-because of what you just saw.
-
-All three estimators support it. This is why the influence functions are derived by hand rather
-than bootstrapped: the bootstrap gives standard errors, but only an influence function gives the
-i.i.d. per-subject sequence a confidence sequence needs. The price is ~1.5–1.7× the fixed-sample
-width — the honest cost of looking.
-
-### Voluntary vs involuntary churn
-
-A large share of subscription churn is involuntary — a card expires, dunning runs out of
-retries. The subscriber never decided anything. A save offer acts on voluntary churn; measured
-against all-cause churn its effect is diluted by a baseline it cannot move, while a card-updater
-shows up as "retention improved" and the retention team takes the credit.
-
-```python
-print(sl.churn_decomposition(panel, horizon=12))
-```
-
-```
-Retention effect by cause of churn, over 12 billing periods
-===========================================================
-  total  +0.3216 periods per subscriber [+0.2297, +0.4134]
-
-  involuntary  -0.0422  [-0.0908, +0.0063]     -13% of the effect
-  voluntary    +0.3638  [+0.2720, +0.4556]     113% of the effect
-
-  Causes sum to the total exactly; the split is an identity, not an attribution.
-```
-
-Note the involuntary number is *negative*: keeping subscribers alive longer gives their card
-more chances to fail. That is a real competing-risks trade-off, it reproduces the simulator's
-closed-form truth, and a single all-cause hazard cannot express it.
-
-Writing `L_j` for periods lost to cause `j`, the decomposition is exact:
-`RMST(H) = H - Σ_j L_j`, so the causes sum to the headline effect with no residual.
-
-What sublift deliberately does *not* report is a cause-specific curve with the other cause
-censored out ("what if nobody ever had a failed payment?"). That isn't identified without
-assuming the causes are independent, which for subscriptions they plainly aren't — the
-subscriber halfway out the door is the one who doesn't bother updating their card.
-
-### Diagnostics that run whether you ask or not
-
-```python
-print(sl.check_randomization(panel, expected_ratio=0.5))
-```
-
-Sample ratio mismatch is tested automatically on every estimate, at the standard `p < 0.001`
-threshold, and warns loudly. A broken assignment invalidates everything downstream and the
-failure is silent — a targeting rule that excluded a segment, a flag that defaulted on for iOS,
-an ETL job that dropped a partition. The result still prints a tight interval.
-
-Baseline covariate balance is reported as standardized mean differences, not t-tests: with a
-large experiment a trivial imbalance is "significant", and with a small one a serious imbalance
-isn't. The standardized difference measures *how big* it is, which is the question.
-
-```python
-print(sl.check_censoring(panel, covariates=["plan", "tenure_bucket", "engagement"]))
-```
-
-Every estimator here assumes subscribers are censored because you cut the data, not because of
-anything they did. That assumption used to be untestable and is now checked: if the panel
-records potential follow-up it is settled by construction, and otherwise sublift fits the
-censoring hazard with and without your covariates and compares the fits.
-
-When it fires, the honest answer is that informative censoring is **detectable and partly
-correctable, not solvable**. `adjusted` with the offending covariate more than halves the bias
-(+0.0179 → +0.0077 on a true effect of +0.2587); `censoring_covariates=` adds a partial hedge
-when the outcome model is incomplete. Neither eliminates it, and the docs
-[say so with the numbers](docs/assumptions.md#2-censoring-is-administrative).
-
-### Planning, before you start
-
-```python
-plan = sl.duration_to_detect(arrivals_per_period=8_000, horizon=12,
-                             baseline_hazard=0.06, treatment_odds_ratio=0.90)
-```
-
-Enrollment duration needed under both fixed-sample and always-valid analysis. Computed by
-simulating your actual enrollment schedule, because the variance of a censored survival contrast
-depends on the enrollment pattern in a way no closed form captures — subscribers who joined last
-month contribute one period of follow-up each to a 12-period estimand.
-
-### Targeting
-
-```python
-curve = sl.qini(panel, horizon=12, covariates=["engagement", "plan", "tenure_bucket"])
-curve.best_fraction()
-```
-
-Per-subscriber effects on the same restricted-mean scale as the headline number,
-**cross-fitted** so nobody is ranked by a model that saw them. Each point of the curve is a real
-censoring-aware estimate re-run inside the targeted subset — not a sum of predicted scores.
-
-The default learner is deliberately **not** a T-learner. Fitting a model per arm and differencing
-them makes predicted heterogeneity depend on `(γ̂₁ − γ̂₀)′x`, the gap between two independently
-estimated coefficient vectors. With no real effect modification that gap is pure noise, and it
-does not average out. sublift fits one pooled model with **ridge-penalized treatment×covariate
-interactions**, with the penalty chosen by held-out likelihood. Real heterogeneity survives it;
-noise doesn't. [It wins in both regimes.](#does-it-actually-work)
+**Planning and targeting** — `duration_to_detect` answers how long until the test can answer the
+question, by simulating your actual enrollment schedule. `qini` gives cross-fitted per-subscriber
+effects, with a pooled shrunk-interaction learner that beats a T-learner whether or not effect
+modification is real (0.26 → 0.62 when it isn't, 0.94 → 0.97 when it is).
 
 ## Does it run on a real subscriber base?
 
@@ -387,7 +249,7 @@ question. One million subscribers, twelve billing periods, on a laptop:
 | `retained_periods_lift` (stratified) | 1.54s | 138 MB |
 | `incremental_ltv` | 0.41s | 168 MB |
 | `churn_decomposition` | 0.18s | 97 MB |
-| `segment_scan` (8 segments) | 1.42s | 298 MB |
+| `segment_scan` (8 segments) | 0.22s | 53 MB |
 | `retained_periods_lift` (adjusted) | 1.89s | 803 MB |
 | **`review`** (checks + both metrics + causes) | **1.89s** | **160 MB** |
 
@@ -396,40 +258,15 @@ Ten times that — **ten million subscribers** — and everything is still under
 algorithms are linear in subscribers, so a hundred million extrapolates to roughly half a minute
 and 5–8 GB — a server, not a laptop.
 
-`segment_scan` used to be the binding constraint, because forming the covariance between
-segments appeared to need their influence values side by side. It does not: a segment's influence
-function is zero off its own subscribers, so storing it compactly and computing the
-cross-products through one scratch vector costs the base times the number of **dimensions**
-scanned rather than the number of segments. Cross-producting three dimensions into 18 segments
-now costs *less* than scanning them as 8, which is the shape you want when someone slices finely.
-
-Getting there took four things worth naming, because each is the kind of cost that is invisible
-until someone runs it at scale:
-
-**The influence function forms no matrix at all.** Both of its terms collapse once you notice
-what the indicators are — a subscriber contributes their event term in exactly one period and
-their at-risk term in a prefix of periods — so the whole thing is a lookup into two arrays of
-length `horizon`. That is 440 MB down to 33 MB at a million subscribers, and six times faster,
-with results identical to 1e-13.
-
-**The segment odds-ratio fit is aggregated.** Its design is entirely categorical — time dummies
-and an arm indicator — so however many million person-periods a segment contains, there are only
-`2 × horizon` distinct rows. Counting them and fitting the aggregate is the same likelihood:
-`segment_scan` went from 1.78s/392 MB to 0.55s/119 MB.
-
-**Everything else works in blocks.** The covariate-adjusted estimator and the competing-risks
-decomposition process subscribers in chunks, so peak memory is flat in the size of the base
-rather than proportional to it. The chunking is exact — identical to twelve decimal places at
-chunk sizes of 7, 100,000, and unbounded.
-
-**And some of it was dead.** `segment_scan` kept one full-length array per segment holding the
-control arm's influence function — left behind when the second heterogeneity scale changed from
-the proportional effect to the churn odds ratio, and read by nothing since. Deleting it took
-1.78 GB to 1.13 GB at ten million subscribers. Profiling found that; reasoning about the code
-had not.
+Two properties are worth knowing because they are not the obvious ones. **Memory does not grow
+with the horizon**: the influence function forms no subscriber-by-period array at all, because
+both of its terms collapse to lookups into arrays of length `horizon`. And **`segment_scan`
+memory does not grow with the number of segments**, only with the number of dimensions scanned —
+cross-producting three dimensions into 18 segments costs less than scanning them as 8.
 
 `tests/test_scale.py` asserts these budgets, because reintroducing an `(n, horizon)` temporary in
-a hot path is easy and no correctness test would catch it.
+a hot path is easy and no correctness test would catch it. The optimisation history, including
+what turned out to be dead code, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Families the library can't see
 
@@ -512,6 +349,14 @@ At 65% censoring the naive estimator is wrong by 47% of the effect it's trying t
 
 Nominal rate: 5%. Sixteen looks turn a 5% test into a 26% one.
 
+**The validation is not circular.** Everything above generates from `sublift.datasets`, which
+encodes one author's assumptions about how subscriptions behave — and if those were the same
+assumptions baked into the estimators, none of it would prove anything. So one test generates
+from somewhere else entirely: continuous-time Weibull lifetimes discretised onto billing periods,
+gamma frailty so hazards are *not* logistic in anything observed, and a treatment that acts by
+accelerating time rather than shifting odds. All three estimators recover the true effect within
+1.5 standard errors, including the covariate-adjusted one with a now badly misspecified model.
+
 **The uplift learner earns its default.** Correlation between predicted and true individual
 effect:
 
@@ -533,7 +378,7 @@ each other — two independent routes to the same standard error.
 | | |
 |---|---|
 | **`review`** | **the checks, the estimate and a verdict — start here** |
-| `SubscriberPanel.from_spans` | dates in, billing periods out — **start here** |
+| `SubscriberPanel.from_spans` | dates in, billing periods out |
 | `.from_spells` | several paying spells per subscriber (win-backs, pauses) |
 | `.from_periods` / `.from_subjects` | already have period counts |
 | `check_randomization` | SRM + baseline balance |
@@ -553,6 +398,7 @@ each other — two independent routes to the same standard error.
 | `LiftResult.curves` | per-arm survival and cumulative value |
 | `duration_to_detect` | how long until this test can answer |
 | `qini` / `uplift_scores` | targeting |
+| `simulate_experiment` / `simulate_multi_arm` | ground-truth data for planning and validation |
 | `simulate_experiment` | ground-truth data for planning and validation |
 
 Results render as HTML in Jupyter, and `SubliftError` / `PanelError` / `NotIdentifiedError`
@@ -570,26 +416,22 @@ What sublift assumes, stated rather than buried:
   the bias randomization removed; the panel constructors reject it.
 - **Two arms** for the ordinary estimators; use `multi_arm_lift` for more.
 
-Roadmap:
+### What is not here
 
-- [x] Efficient influence function for `adjusted`, giving it a confidence sequence
-- [x] Informative censoring: detected by `check_censoring`, partly corrected by adjustment and
-      `censoring_covariates=`. Not solved — nothing solves it — and documented as such.
-- [x] More than two arms, with family-wise error control (`multi_arm_lift`)
-- [x] Multiplicity across segments (`segment_scan`), with a scale-artefact diagnostic
-- [x] Multiplicity across metrics, and arms × segments (`correct_family`)
-- [x] All-pairs comparisons (`comparisons="all-pairs"`)
-- [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
-- [x] Win-backs and pauses (`from_spells`, `occupancy_lift`)
-- [x] Covariate-adjusted occupancy, and competing risks beyond the first spell
-- [x] Informative censoring: bounded by `censoring_sensitivity` rather than pretended away
-- [x] A sparse influence matrix for `segment_scan`; memory now tracks the number of dimensions
-      scanned rather than the number of segments
-- [x] Sequential monitoring of a whole family — measured, and found to buy about 1%, so
-      Bonferroni stays the default
+- **Stratified or covariate-adjusted competing risks.** `churn_decomposition` is nonparametric.
+- **A hazard model that is not logistic.** Flexible enough in practice with a saturated time
+  baseline, but it is a parametric choice and it is made for you.
+- **Multiplicity across horizons.** Fix the horizon in advance; `correct_family` will correct
+  across several if you insist, but choosing one after seeing the data is not something any
+  correction repairs.
+- **Informative censoring, solved.** It is detected (`check_censoring`), partly corrected
+  (covariate adjustment more than halves the bias) and bounded (`censoring_sensitivity`). It is
+  not solved, here or anywhere, and the docs say so with the numbers.
 
-Nothing large is outstanding. The honest open questions are narrower: competing risks under
-covariate adjustment, a hazard model that is not logistic, and multiplicity across horizons.
+Everything else on the original roadmap is done: an efficient influence function for the adjusted
+estimator, arms and segments and metrics as families, all-pairs comparisons, win-backs and pauses,
+covariate-adjusted occupancy, competing risks beyond the first spell, and the scale work. See
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Documentation
 

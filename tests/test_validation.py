@@ -11,9 +11,11 @@ Seeds are fixed, so the assertions are deterministic rather than flaky.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from sublift import (
+    SubscriberPanel,
     check_censoring,
     churn_decomposition,
     multi_arm_lift,
@@ -706,3 +708,71 @@ def test_effective_multiplicity_spans_independent_to_identical():
     middling = np.full((4, 4), 0.5)
     np.fill_diagonal(middling, 1.0)
     assert 1.0 < effective_multiplicity(middling) < 4.0
+
+
+def test_estimators_recover_truth_from_a_process_the_simulator_cannot_produce():
+    """The antidote to circular validation.
+
+    Every other test here checks sublift against data from ``sublift.datasets``,
+    which encodes one author's assumptions about how subscriptions behave. If
+    those assumptions are the same ones baked into the estimators, the whole
+    suite proves nothing.
+
+    So this generates from somewhere else entirely: continuous-time Weibull
+    lifetimes discretised onto billing periods, gamma frailty so that hazards are
+    *not* logistic in anything observed, and a treatment that acts by accelerating
+    time rather than by shifting odds. The nonparametric estimators claim to be
+    model-free and must recover it; the covariate-adjusted one is now badly
+    misspecified and must recover it anyway, which is what double robustness under
+    randomization is for.
+    """
+    rng = np.random.default_rng(11)
+    n, horizon, shape = 200_000, 10, 1.4
+
+    arm = rng.integers(0, 2, size=n)
+    frailty = rng.gamma(2.0, 0.5, size=n)  # unobserved heterogeneity
+    engagement = rng.normal(size=n)
+    scale = 6.0 * np.exp(0.25 * engagement) * (1.25**arm) / frailty ** (1 / shape)
+    lifetime = np.maximum(np.ceil(scale * rng.weibull(shape, size=n)).astype(int), 1)
+    censor = rng.integers(3, 18, size=n)
+
+    frame = pd.DataFrame(
+        {
+            "uid": np.arange(n),
+            "variant": np.where(arm == 1, "treat", "ctrl"),
+            "n": np.minimum(lifetime, censor),
+            "ev": lifetime <= censor,
+            "engagement": engagement,
+            "bucket": pd.cut(engagement, 3, labels=["lo", "mid", "hi"]),
+        }
+    )
+    panel = SubscriberPanel.from_subjects(
+        frame,
+        subject="uid",
+        arm="variant",
+        periods="n",
+        event="ev",
+        control="ctrl",
+        covariates=["engagement", "bucket"],
+    )
+
+    # Truth from the same process without censoring, at a size where it is precise.
+    big = 3_000_000
+    frailty_t = rng.gamma(2.0, 0.5, size=big)
+    engagement_t = rng.normal(size=big)
+    truth = {}
+    for a in (0, 1):
+        scale_t = 6.0 * np.exp(0.25 * engagement_t) * (1.25**a) / frailty_t ** (1 / shape)
+        lifetime_t = np.maximum(np.ceil(scale_t * rng.weibull(shape, size=big)).astype(int), 1)
+        truth[a] = float(np.minimum(lifetime_t, horizon).mean())
+    true_lift = truth[1] - truth[0]
+
+    for kwargs in (
+        {"estimator": "unadjusted"},
+        {"estimator": "stratified", "strata": ["bucket"]},
+        {"estimator": "adjusted", "covariates": ["engagement", "bucket"]},
+    ):
+        result = retained_periods_lift(panel, horizon=horizon, **kwargs)
+        assert abs(result.estimate - true_lift) < 4 * result.se, (
+            f"{kwargs['estimator']}: {result.estimate:+.4f} against a true {true_lift:+.4f}"
+        )
