@@ -376,6 +376,43 @@ does not average out. sublift fits one pooled model with **ridge-penalized treat
 interactions**, with the penalty chosen by held-out likelihood. Real heterogeneity survives it;
 noise doesn't. [It wins in both regimes.](#does-it-actually-work)
 
+## Does it run on a real subscriber base?
+
+A retention team at a media company has millions of subscribers, so this is not a rhetorical
+question. One million subscribers, twelve billing periods, on a laptop:
+
+| call | time | peak memory |
+|---|---|---|
+| `retained_periods_lift` (unadjusted) | 0.30s | 76 MB |
+| `retained_periods_lift` (stratified) | 1.54s | 138 MB |
+| `incremental_ltv` | 0.41s | 168 MB |
+| `churn_decomposition` | 0.18s | 97 MB |
+| `segment_scan` (8 segments) | 1.42s | 298 MB |
+| `retained_periods_lift` (adjusted) | 1.89s | 803 MB |
+| **`review`** (checks + both metrics + causes) | **1.89s** | **160 MB** |
+
+Getting there took three things worth naming, because each is the kind of cost that is invisible
+until someone runs it at scale:
+
+**The influence function forms no matrix at all.** Both of its terms collapse once you notice
+what the indicators are — a subscriber contributes their event term in exactly one period and
+their at-risk term in a prefix of periods — so the whole thing is a lookup into two arrays of
+length `horizon`. That is 440 MB down to 33 MB at a million subscribers, and six times faster,
+with results identical to 1e-13.
+
+**The segment odds-ratio fit is aggregated.** Its design is entirely categorical — time dummies
+and an arm indicator — so however many million person-periods a segment contains, there are only
+`2 × horizon` distinct rows. Counting them and fitting the aggregate is the same likelihood:
+`segment_scan` went from 1.78s/392 MB to 0.55s/119 MB.
+
+**Everything else works in blocks.** The covariate-adjusted estimator and the competing-risks
+decomposition process subscribers in chunks, so peak memory is flat in the size of the base
+rather than proportional to it. The chunking is exact — identical to twelve decimal places at
+chunk sizes of 7, 100,000, and unbounded.
+
+`tests/test_scale.py` asserts these budgets, because reintroducing an `(n, horizon)` temporary in
+a hot path is easy and no correctness test would catch it.
+
 ## Why not just…
 
 | | has | missing |

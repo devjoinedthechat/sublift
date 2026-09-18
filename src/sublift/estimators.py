@@ -714,35 +714,17 @@ def _adjusted(
             "inference='bootstrap'.",
             stacklevel=4,
         )
-    t_grid = np.arange(1, horizon + 1, dtype=np.int64)[None, :]
-    at_risk = panel.n_periods[:, None] >= t_grid
-    churned_at = (panel.n_periods[:, None] == t_grid) & panel.event[:, None]
-
     values, eifs, arms, notes = {}, {}, {}, []
     for a in (0, 1):
         mask = panel.arm[rows] == a
         fit = _fit_hazards(mask, X_sub, rows, period, churn, horizon)
-        hazard_i = _individual_hazard(fit, X_sub, horizon)
-        surv_i = np.cumprod(1.0 - hazard_i, axis=1)
-
-        share = float((panel.arm == a).mean())
-        in_arm = (panel.arm == a)[:, None]
-        residual = churned_at.astype(float) - at_risk * hazard_i
-        # Inverse-censoring-weighted residuals, divided through by the subject's own
-        # survival so the running sum telescopes into S(t|X)/S(s|X) -- a ratio that is
-        # always <= 1, which is what keeps the augmentation bounded.
-        contribution = in_arm * residual / (share * gbar)
-        accumulated = np.cumsum(contribution / np.maximum(surv_i, 1e-12), axis=1)
-
-        corrected = surv_i * (1.0 - accumulated)
-        lagged = np.concatenate((np.ones((n, 1)), corrected[:, :-1]), axis=1)
-        curve_lagged = lagged.mean(axis=0)
-        curve = corrected.mean(axis=0)
-
         w = weights[a][0]
+        curve, curve_lagged, weighted = _standardize(panel, fit, X_sub, gbar, horizon, a, w)
+
         values[a] = float((w * curve_lagged).sum())
-        # Mean zero by construction, since the curve is the sample mean of `lagged`.
-        eifs[a] = (w * (lagged - curve_lagged[None, :])).sum(axis=1)
+        # IF_i = sum_t w_t (lagged_i[t] - mean_t), and the second term is the same for
+        # everyone, so the per-subscriber pass only has to carry one number each.
+        eifs[a] = weighted - values[a]
 
         if np.any(np.diff(curve) > 1e-9):
             notes.append(
@@ -774,6 +756,54 @@ def _adjusted(
     }
 
 
+# Subject-by-period work is done in blocks so peak memory stays flat in the number of
+# subscribers. Done all at once, a million-subscriber panel allocates several gigabytes
+# here -- and a retention team with a million subscribers is exactly the audience for a
+# covariate-adjusted estimate.
+_CHUNK = 100_000
+
+
+def _standardize(panel, fit, X_sub, gbar, horizon, arm, weights):
+    """Corrected survival curve, its lag, and each subscriber's weighted contribution.
+
+    One pass over blocks of subscribers, accumulating the column sums that make the
+    curve and the single weighted number per subscriber that makes the influence
+    function.
+    """
+    n = panel.n_subjects
+    share = float((panel.arm == arm).mean())
+    grid = np.arange(1, horizon + 1, dtype=np.int64)[None, :]
+
+    corrected_sum = np.zeros(horizon)
+    lagged_sum = np.zeros(horizon)
+    weighted = np.empty(n)
+
+    for lo in range(0, n, _CHUNK):
+        hi = min(lo + _CHUNK, n)
+        block = slice(lo, hi)
+        periods = panel.n_periods[block][:, None]
+        at_risk = periods >= grid
+        churned_at = (periods == grid) & panel.event[block][:, None]
+
+        hazard = _individual_hazard(fit, X_sub[block], horizon)
+        survival = np.cumprod(1.0 - hazard, axis=1)
+
+        in_arm = (panel.arm[block] == arm)[:, None]
+        residual = churned_at.astype(float) - at_risk * hazard
+        censoring = gbar[block] if gbar.ndim == 2 and gbar.shape[0] == n else gbar
+        contribution = in_arm * residual / (share * censoring)
+        accumulated = np.cumsum(contribution / np.maximum(survival, 1e-12), axis=1)
+
+        corrected = survival * (1.0 - accumulated)
+        lagged = np.concatenate((np.ones((hi - lo, 1)), corrected[:, :-1]), axis=1)
+
+        corrected_sum += corrected.sum(axis=0)
+        lagged_sum += lagged.sum(axis=0)
+        weighted[block] = lagged @ weights
+
+    return corrected_sum / n, lagged_sum / n, weighted
+
+
 def _individual_hazard(fit, X_all, horizon):
     """Per-subject hazard h(t | X_i) under one arm, shape (n_subjects, horizon)."""
     alpha_t = fit.coef[:horizon]
@@ -786,9 +816,13 @@ def _individual_hazard(fit, X_all, horizon):
 def _fit_hazards(arm_rows_mask, X_sub, rows, period, churn, horizon):
     """Arm-specific hazard model: saturated time baseline plus covariates."""
     r, t, y = rows[arm_rows_mask], period[arm_rows_mask], churn[arm_rows_mask]
-    time_dummies = np.zeros((t.size, horizon))
-    time_dummies[np.arange(t.size), t - 1] = 1.0
-    X = np.hstack([time_dummies, X_sub[r]]) if X_sub.size else time_dummies
+    # Filled in place: hstacking a separate time-dummy block would allocate the whole
+    # person-period design twice, and on a large panel that is the peak.
+    width = horizon + (X_sub.shape[1] if X_sub.size else 0)
+    X = np.zeros((t.size, width))
+    X[np.arange(t.size), t - 1] = 1.0
+    if X_sub.size:
+        X[:, horizon:] = X_sub[r]
     return fit_logistic(X, y)
 
 

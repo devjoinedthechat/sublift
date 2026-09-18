@@ -47,6 +47,7 @@ def fit_logistic(
     y: np.ndarray,
     *,
     ridge: float | np.ndarray = 1e-8,
+    sample_weight: np.ndarray | None = None,
     max_iter: int = 100,
     tol: float = 1e-10,
     names: list[str] | None = None,
@@ -61,12 +62,23 @@ def fit_logistic(
     ``ridge`` may also be a per-coefficient vector, which is how the uplift model
     penalizes its treatment-by-covariate interactions while leaving the main
     effects alone.
+
+    ``sample_weight`` lets identical rows be collapsed into counts. A design made
+    only of categorical columns has at most a handful of distinct rows however
+    many subscribers produced them, and fitting the aggregate is exactly the same
+    likelihood at a fraction of the memory.
     """
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     n, p = X.shape
     if y.shape[0] != n:
         raise ValueError(f"X has {n} rows but y has {y.shape[0]}.")
+
+    sw = np.ones(n) if sample_weight is None else np.asarray(sample_weight, dtype=float)
+    if sw.shape != (n,):
+        raise ValueError(f"sample_weight has shape {sw.shape}, expected ({n},).")
+    if (sw < 0).any():
+        raise ValueError("sample_weight must be non-negative.")
 
     coef = np.zeros(p)
     ridge_vec = np.broadcast_to(np.asarray(ridge, dtype=float), (p,)).copy()
@@ -81,8 +93,8 @@ def fit_logistic(
         eta = X @ coef
         mu = _expit(eta)
         w = np.clip(mu * (1 - mu), 1e-10, None)
-        grad = X.T @ (y - mu) - ridge_vec * coef
-        hess = (X * w[:, None]).T @ X + penalty
+        grad = X.T @ (sw * (y - mu)) - ridge_vec * coef
+        hess = _weighted_gram(X, sw * w) + penalty
         try:
             step = np.linalg.solve(hess, grad)
         except np.linalg.LinAlgError:
@@ -92,7 +104,7 @@ def fit_logistic(
         scale = 1.0
         for _ in range(30):
             cand = coef + scale * step
-            ll = _loglik(X, y, cand, ridge_vec)
+            ll = _loglik(X, y, cand, ridge_vec, sw)
             if ll >= prev_ll - 1e-12:
                 break
             scale *= 0.5
@@ -111,7 +123,7 @@ def fit_logistic(
     eta = X @ coef
     mu = _expit(eta)
     w = np.clip(mu * (1 - mu), 1e-10, None)
-    hess = (X * w[:, None]).T @ X + penalty
+    hess = _weighted_gram(X, sw * w) + penalty
     return LogisticFit(coef=coef, hessian=hess, n_iter=it, converged=converged, names=names)
 
 
@@ -162,6 +174,24 @@ def design_matrix(
     return X, names, enc
 
 
+# Person-period designs get long. Accumulating X'WX in row blocks keeps the working
+# copy bounded instead of allocating a second full design on every Newton step.
+_GRAM_ROWS = 250_000
+
+
+def _weighted_gram(X: np.ndarray, w: np.ndarray) -> np.ndarray:
+    """``X' diag(w) X``, without materialising a weighted copy of a long design."""
+    rows, cols = X.shape
+    if rows <= _GRAM_ROWS:
+        return (X * w[:, None]).T @ X
+    out = np.zeros((cols, cols))
+    for lo in range(0, rows, _GRAM_ROWS):
+        block = slice(lo, min(lo + _GRAM_ROWS, rows))
+        chunk = X[block]
+        out += (chunk * w[block, None]).T @ chunk
+    return out
+
+
 def _expit(x: np.ndarray) -> np.ndarray:
     out = np.empty_like(x, dtype=float)
     pos = x >= 0
@@ -171,7 +201,8 @@ def _expit(x: np.ndarray) -> np.ndarray:
     return out
 
 
-def _loglik(X, y, coef, ridge) -> float:
+def _loglik(X, y, coef, ridge, sw=None) -> float:
     eta = X @ coef
-    ll = np.sum(y * eta - np.logaddexp(0.0, eta))
+    terms = y * eta - np.logaddexp(0.0, eta)
+    ll = np.sum(terms if sw is None else sw * terms)
     return float(ll - 0.5 * float(np.sum(np.asarray(ridge) * coef * coef)))

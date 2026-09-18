@@ -514,19 +514,50 @@ def _segment_odds_ratio(panel, mask, horizon) -> tuple[float, float]:
     terms over the person-periods at risk, so this is an ordinary logistic fit
     and its model-based standard error is the right one -- no clustering needed,
     despite the repeated rows per subscriber.
+
+    Built from the three arrays it needs rather than from a sub-panel: taking a
+    sub-panel would copy the covariate frame and the revenue grid for every
+    segment, which on a large base costs more than the fit.
     """
-    from .estimators import _person_period
     from .logistic import fit_logistic
 
-    segment = panel.take(np.flatnonzero(mask))
-    rows, period, churn, _, _ = _person_period(segment, horizon)
-    if rows.size == 0 or churn.sum() == 0:
+    n_periods = panel.n_periods[mask]
+    event = panel.event[mask]
+    arm = panel.arm[mask]
+    if n_periods.size == 0:
         return float("nan"), float("nan")
 
-    design = np.zeros((period.size, horizon + 1))
-    design[np.arange(period.size), period - 1] = 1.0
-    design[:, horizon] = segment.arm[rows]
-    fit = fit_logistic(design, churn)
+    # The design here is time dummies plus an arm indicator -- entirely categorical, so
+    # however many million person-periods a segment has, there are only 2 x horizon
+    # distinct rows. Counting them and fitting the aggregate is the same likelihood.
+    capped = np.minimum(n_periods, horizon)
+    churned_in = event & (n_periods <= horizon)
+
+    at_risk = np.zeros((2, horizon))
+    churned = np.zeros((2, horizon))
+    for a in (0, 1):
+        side = arm == a
+        counts = np.bincount(capped[side], minlength=horizon + 1)[1:]
+        at_risk[a] = np.cumsum(counts[::-1])[::-1]
+        churned[a] = np.bincount(n_periods[side & churned_in], minlength=horizon + 1)[1 : horizon + 1]
+    if churned.sum() == 0:
+        return float("nan"), float("nan")
+
+    cells = 2 * horizon
+    design = np.zeros((2 * cells, horizon + 1))
+    outcome = np.zeros(2 * cells)
+    weight = np.zeros(2 * cells)
+    row = 0
+    for a in (0, 1):
+        for t in range(horizon):
+            for success in (1.0, 0.0):
+                design[row, t] = 1.0
+                design[row, horizon] = a
+                outcome[row] = success
+                weight[row] = churned[a, t] if success else at_risk[a, t] - churned[a, t]
+                row += 1
+
+    fit = fit_logistic(design, outcome, sample_weight=weight)
     try:
         variance = np.linalg.inv(fit.hessian)[horizon, horizon]
     except np.linalg.LinAlgError:

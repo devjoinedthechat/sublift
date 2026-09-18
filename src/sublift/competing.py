@@ -212,6 +212,10 @@ def churn_decomposition(
     )
 
 
+# Subject-by-period work in blocks, so peak memory does not grow with the base.
+_CHUNK = 100_000
+
+
 def _arm_decomposition(n_periods, event, cause, horizon, n_causes, allow_extrapolation):
     """Periods lost to each cause, and the influence function of each.
 
@@ -223,43 +227,55 @@ def _arm_decomposition(n_periods, event, cause, horizon, n_causes, allow_extrapo
 
     with the product-limit influence ``IF(S(t)) = -S(t) * cumsum_u A(u)`` and
     ``IF(h_j(s)) = [dN_j(s) - Y(s) h_j(s)] / pi(s)``.
+
+    The cause-specific hazards need no subject-by-period array at all -- a churn
+    lands in exactly one period, so counting them is a ``bincount`` -- and the
+    influence pass runs in blocks.
     """
     surv = fit_survival(n_periods, event, horizon, allow_extrapolation=allow_extrapolation)
     n = n_periods.size
     H = horizon
 
-    t_grid = np.arange(1, H + 1, dtype=np.int64)[None, :]
-    at_risk_i = n_periods[:, None] >= t_grid  # Y_i(t)
-    churn_i = (n_periods[:, None] == t_grid) & event[:, None]  # dN_i(t), any cause
-
     pi = surv.at_risk_fraction
     haz = surv.hazard
-    s_lag = surv.survival_lagged  # S(t-1) for t = 1..H
+    s_lag = surv.survival_lagged
 
-    # A_i(u) and its running sum C_i(t) = sum_{u<=t} A_i(u), with C_i(0) = 0.
     denom = pi * (1.0 - haz)
     a_scale = np.divide(1.0, denom, out=np.zeros_like(denom), where=denom > 0)
-    martingale = churn_i.astype(float) - at_risk_i * haz[None, :]
-    A = martingale * a_scale[None, :]
-    C = np.cumsum(A, axis=1)
-    C_lag = np.concatenate((np.zeros((n, 1)), C[:, :-1]), axis=1)  # C_i(t-1)
-
-    # Only periods s = 1..H-1 can cost anything inside the horizon: a subscription
-    # ending in period H forfeits no period that the horizon would have counted.
+    # Only periods s < H can cost anything inside the horizon: a subscription ending in
+    # period H forfeits no period the horizon would have counted.
     g = np.maximum(H - np.arange(1, H + 1), 0).astype(float)
     inv_pi = np.divide(1.0, pi, out=np.zeros_like(pi), where=pi > 0)
 
     lost = np.zeros(n_causes)
-    influence = np.zeros((n_causes, n))
+    hazards = np.zeros((n_causes, H))
+    within = event & (n_periods <= H)
     for j in range(n_causes):
-        churn_ij = (n_periods[:, None] == t_grid) & event[:, None] & (cause[:, None] == j)
-        d_j = churn_ij.sum(axis=0)
-        haz_j = np.divide(d_j, surv.at_risk, out=np.zeros(H), where=surv.at_risk > 0)
+        counts = np.bincount(n_periods[within & (cause == j)], minlength=H + 1)[1 : H + 1]
+        hazards[j] = np.divide(counts, surv.at_risk, out=np.zeros(H), where=surv.at_risk > 0)
+        lost[j] = float(np.sum(g * s_lag * hazards[j]))
 
-        lost[j] = float(np.sum(g * s_lag * haz_j))
+    survival_weight = g * s_lag  # shared by both terms
+    hazard_weight = survival_weight * inv_pi
 
-        term_survival = -(g * haz_j * s_lag)[None, :] * C_lag
-        term_hazard = (g * s_lag * inv_pi)[None, :] * (churn_ij.astype(float) - at_risk_i * haz_j[None, :])
-        influence[j] = (term_survival + term_hazard).sum(axis=1)
+    influence = np.empty((n_causes, n))
+    grid = np.arange(1, H + 1, dtype=np.int64)[None, :]
+    for lo in range(0, n, _CHUNK):
+        hi = min(lo + _CHUNK, n)
+        block = slice(lo, hi)
+        periods = n_periods[block][:, None]
+        at_risk = periods >= grid
+        churned_at = (periods == grid) & event[block][:, None]
+
+        # C_i(t) = sum_{u<=t} A_i(u), then lagged by one period.
+        contributions = churned_at.astype(float) - at_risk * haz
+        running = np.cumsum(contributions * a_scale, axis=1)
+        lagged = np.concatenate((np.zeros((hi - lo, 1)), running[:, :-1]), axis=1)
+
+        for j in range(n_causes):
+            in_cause = churned_at & (cause[block] == j)[:, None]
+            term_survival = -(survival_weight * hazards[j]) * lagged
+            term_hazard = hazard_weight * (in_cause.astype(float) - at_risk * hazards[j])
+            influence[j, block] = (term_survival + term_hazard).sum(axis=1)
 
     return {"lost": lost, "influence": influence, "survival": surv}

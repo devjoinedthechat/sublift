@@ -10,6 +10,27 @@ slipped into a patch release.
 
 ## [Unreleased]
 
+### Performance
+- **Runs on a real subscriber base.** A million subscribers over twelve billing periods: every
+  estimator under two seconds, and `review` — the checks plus both metrics plus the
+  competing-risks split — in 1.9s and 160 MB.
+
+  Three changes got it there. The influence function now forms **no subscriber-by-period matrix
+  at all**: both of its terms collapse to lookups into length-`horizon` arrays, since a
+  subscriber contributes their event term in one period and their at-risk term in a prefix of
+  periods. 440 MB to 33 MB at a million subscribers, six times faster, results identical to
+  1e-13. The segment odds-ratio fit is **aggregated** — its design is entirely categorical, so
+  however many million person-periods a segment holds there are only `2 × horizon` distinct rows
+  (`segment_scan`: 1.78s/392 MB to 0.55s/119 MB). And the covariate-adjusted estimator and the
+  competing-risks decomposition now work in **blocks**, so peak memory is flat in the size of the
+  base; verified identical to twelve decimals at chunk sizes 7, 100,000 and unbounded.
+
+- `fit_logistic` accepts `sample_weight`, which is what makes aggregating a categorical design
+  possible. Exact against the expanded fit to 4.6e-15.
+
+- `tests/test_scale.py` asserts the memory budgets, because reintroducing an `(n, horizon)`
+  temporary in a hot path is easy and no correctness test would catch it.
+
 ### Added
 - **`review`: one entry point that runs the checks in the order that matters.** The library had
   grown to a dozen functions where knowing which to call when was most of the skill, and that
