@@ -267,7 +267,7 @@ def _effects(panel, horizon, price, estimator, strata, alpha, expected_ratio, ex
             allow_extrapolation=extrapolate,
         )
         value = None
-        if price is not None or panel.revenue is not None:
+        if price is not None or panel.has_revenue:
             value = occupancy_lift(
                 panel,
                 horizon=horizon,
@@ -282,7 +282,7 @@ def _effects(panel, horizon, price, estimator, strata, alpha, expected_ratio, ex
 
     retention = retained_periods_lift(panel, **shared)
     value = None
-    if price is not None or panel.revenue is not None:
+    if price is not None or panel.has_revenue:
         value = incremental_ltv(panel, price=price, **shared)
     return retention, value
 

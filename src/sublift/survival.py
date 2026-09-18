@@ -130,9 +130,11 @@ def weighted_value(surv: DiscreteSurvival, weights: np.ndarray | float = 1.0) ->
 
 
 def empirical_revenue_weights(
-    revenue: np.ndarray,
+    revenue: np.ndarray | None,
     n_periods: np.ndarray,
     horizon: int,
+    *,
+    flat: np.ndarray | None = None,
 ) -> np.ndarray:
     """Mean revenue per period among subjects actually at risk in that period.
 
@@ -141,8 +143,22 @@ def empirical_revenue_weights(
     ``sum_t w_t S(t-1)``, and an analysis that holds price fixed across arms
     books the retention win while hiding the discount that bought it.
     """
-    revenue = np.asarray(revenue, dtype=float)
     n_periods = np.asarray(n_periods, dtype=np.int64)
+    if flat is not None:
+        # One price per subscriber: the mean among the at-risk is a pair of tail sums,
+        # so there is no grid to walk.
+        flat = np.asarray(flat, dtype=float)
+        capped = np.minimum(n_periods, horizon + 1)
+        totals = np.cumsum(np.bincount(capped, weights=flat, minlength=horizon + 2)[::-1])[::-1]
+        counts = np.cumsum(np.bincount(capped, minlength=horizon + 2)[::-1])[::-1]
+        return np.divide(
+            totals[1 : horizon + 1],
+            counts[1 : horizon + 1],
+            out=np.zeros(horizon),
+            where=counts[1 : horizon + 1] > 0,
+        )
+
+    revenue = np.asarray(revenue, dtype=float)
     width = revenue.shape[1]
     out = np.zeros(horizon, dtype=float)
     for idx, t in enumerate(range(1, horizon + 1)):

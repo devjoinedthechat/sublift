@@ -31,6 +31,7 @@ from .diagnostics import (
 )
 from .estimators import ArmSummary, LiftResult, incremental_ltv, retained_periods_lift
 from .exceptions import EstimationError, NotIdentifiedError, PanelError, SubliftError
+from .family import CorrectedFamily, FamilyMember, correct_family
 from .multiarm import ArmContrast, MultiArmResult, multi_arm_lift
 from .occupancy import occupancy_lift
 from .panel import SubscriberPanel
@@ -55,6 +56,9 @@ __all__ = [
     "SegmentScan",
     "SegmentEffect",
     "Heterogeneity",
+    "correct_family",
+    "CorrectedFamily",
+    "FamilyMember",
     "multi_arm_lift",
     "MultiArmResult",
     "ArmContrast",

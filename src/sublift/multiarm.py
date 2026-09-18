@@ -38,12 +38,13 @@ from scipy import stats
 
 from .estimators import _fit_arm, _resolve_horizon
 from .exceptions import NotIdentifiedError, PanelError
-from .panel import SubscriberPanel
+from .family import calibrate as _calibrate
+from .family import correlation as _correlation
+from .panel import SubscriberPanel, stratum_codes
 
 __all__ = ["multi_arm_lift", "MultiArmResult", "ArmContrast"]
 
-_CORRECTIONS = ("max-t", "holm", "bonferroni", "none")
-_MC_DRAWS = 200_000
+from .family import CORRECTIONS as _CORRECTIONS
 
 
 @dataclass(frozen=True)
@@ -294,7 +295,7 @@ def multi_arm_lift(
 
 def _multi_arm_weights(panel, horizon, metric, price):
     """Per-arm revenue weights, generalizing the two-arm helper to K arms."""
-    from .survival import empirical_revenue_weights
+    from .estimators import _weights_for
 
     if metric == "retained_periods":
         return {a: (np.ones(horizon), False) for a in range(panel.n_arms)}
@@ -310,7 +311,7 @@ def _multi_arm_weights(panel, horizon, metric, price):
         sched = _schedule(price, horizon)
         return dict.fromkeys(range(panel.n_arms), (sched, False))
 
-    if panel.revenue is None:
+    if not panel.has_revenue:
         raise ValueError(
             "No revenue in the panel and no price= given, so LTV cannot be formed. Pass "
             "price=..., build the panel with revenue=..., or use metric='retained_periods'."
@@ -318,7 +319,7 @@ def _multi_arm_weights(panel, horizon, metric, price):
     out = {}
     for a in range(panel.n_arms):
         mask = panel.arm == a
-        out[a] = (empirical_revenue_weights(panel.revenue[mask], panel.n_periods[mask], horizon), True)
+        out[a] = (_weights_for(panel, mask, horizon), True)
     return out
 
 
@@ -358,14 +359,7 @@ def _stratified_arms(panel, horizon, weights, strata, allow_extrapolation, notes
     if missing:
         raise PanelError(f"Strata column(s) {missing} not in the panel's covariates.")
 
-    as_str = panel.covariates[strata].astype(str)
-    first = as_str[strata[0]]
-    key = (
-        first.str.cat([as_str[c] for c in strata[1:]], sep="|").to_numpy()
-        if len(strata) > 1
-        else first.to_numpy()
-    )
-    levels, codes = np.unique(key, return_inverse=True)
+    codes, levels = stratum_codes(panel.covariates, strata)
 
     n = panel.n_subjects
     n_arms = panel.n_arms
@@ -405,51 +399,3 @@ def _stratified_arms(panel, horizon, weights, strata, allow_extrapolation, notes
     deltas = stratum_delta @ pi
     psi = psi[:, kept] + (stratum_delta[:, codes[kept]] - deltas[:, None])
     return values, psi
-
-
-def _correlation(cov: np.ndarray) -> np.ndarray:
-    sd = np.sqrt(np.diag(cov))
-    outer = np.outer(sd, sd)
-    corr = np.divide(cov, outer, out=np.eye(cov.shape[0]), where=outer > 0)
-    return np.clip(corr, -1.0, 1.0)
-
-
-def _calibrate(correction, corr, z_scores, raw_p, alpha, k, seed):
-    """Critical value and adjusted p-values for the chosen correction."""
-    if correction == "none":
-        return float(stats.norm.ppf(1 - alpha / 2)), raw_p
-    if correction == "bonferroni":
-        return float(stats.norm.ppf(1 - alpha / (2 * k))), np.minimum(1.0, raw_p * k)
-    if correction == "holm":
-        order = np.argsort(raw_p)
-        adjusted = np.empty_like(raw_p)
-        running = 0.0
-        for rank, idx in enumerate(order):
-            running = max(running, (k - rank) * raw_p[idx])
-            adjusted[idx] = min(1.0, running)
-        # Holm is a testing procedure, not an interval procedure; intervals stay Bonferroni.
-        return float(stats.norm.ppf(1 - alpha / (2 * k))), adjusted
-
-    # max-t: calibrate against the actual correlation between contrasts.
-    rng = np.random.default_rng(seed)
-    draws = _multivariate_normal(rng, corr, _MC_DRAWS)
-    maxima = np.abs(draws).max(axis=1)
-    critical = float(np.quantile(maxima, 1 - alpha))
-    adjusted = np.array([(maxima > abs(z)).mean() for z in z_scores])
-    return critical, np.clip(adjusted, 1.0 / _MC_DRAWS, 1.0)
-
-
-def _multivariate_normal(rng, corr: np.ndarray, draws: int) -> np.ndarray:
-    """Correlated normals via Cholesky, falling back to an eigen decomposition.
-
-    The estimated correlation matrix can be numerically indefinite when two arms
-    are nearly collinear, which Cholesky will not tolerate and the experiment
-    should not fail over.
-    """
-    k = corr.shape[0]
-    try:
-        factor = np.linalg.cholesky(corr + 1e-10 * np.eye(k))
-    except np.linalg.LinAlgError:
-        values, vectors = np.linalg.eigh(corr)
-        factor = vectors @ np.diag(np.sqrt(np.clip(values, 0.0, None)))
-    return rng.standard_normal((draws, k)) @ factor.T

@@ -46,6 +46,7 @@ def value_influence(
     weights: np.ndarray | float = 1.0,
     *,
     revenue: np.ndarray | None = None,
+    flat_revenue: np.ndarray | None = None,
 ) -> np.ndarray:
     """Per-subject influence values for ``weighted_value(surv, weights)``.
 
@@ -91,14 +92,14 @@ def value_influence(
     churned = event & (n_periods <= horizon)
     inf[churned] -= scale[n_periods[churned] - 1]
 
-    if revenue is not None:
-        inf = inf + _revenue_influence(revenue, n_periods, capped, pi, s_lag, w, horizon)
+    if revenue is not None or flat_revenue is not None:
+        inf = inf + _revenue_influence(revenue, flat_revenue, capped, pi, s_lag, w, horizon)
     return inf
 
 
 def _revenue_influence(
-    revenue: np.ndarray,
-    n_periods: np.ndarray,
+    revenue: np.ndarray | None,
+    flat_revenue: np.ndarray | None,
     capped: np.ndarray,
     pi: np.ndarray,
     s_lag: np.ndarray,
@@ -112,12 +113,18 @@ def _revenue_influence(
     single matrix-vector product rather than a chain of temporaries. The expected
     half is a prefix sum like the rest.
     """
+    scale = np.divide(s_lag, pi, out=np.zeros_like(s_lag), where=pi > 0)
+    expected = np.concatenate(([0.0], np.cumsum(w * scale)))[capped]
+
+    if flat_revenue is not None:
+        # A constant price collapses the same way the rest does: a prefix sum of the
+        # scale, evaluated at each subscriber's last period.
+        prefix = np.concatenate(([0.0], np.cumsum(scale)))
+        return np.asarray(flat_revenue, dtype=float) * prefix[capped] - expected
+
     revenue = np.asarray(revenue, dtype=float)
     width = min(horizon, revenue.shape[1])
-    scale = np.divide(s_lag, pi, out=np.zeros_like(s_lag), where=pi > 0)
-
     observed = np.nan_to_num(revenue[:, :width], nan=0.0) @ scale[:width]
-    expected = np.concatenate(([0.0], np.cumsum(w * scale)))[capped]
     return observed - expected
 
 

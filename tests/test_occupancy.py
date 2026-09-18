@@ -73,9 +73,13 @@ def test_overlapping_spells_are_not_double_counted():
 
 def test_a_gap_earns_nothing():
     p = build(price=10.0)
+    grid = p.revenue_grid()
     # uid 1's lapsed periods 4 and 5 bring in no revenue, but are still observed.
-    assert p.revenue[0, 3] == 0.0
-    assert p.revenue[0, 5] == 10.0
+    assert grid[0, 3] == 0.0
+    assert grid[0, 5] == 10.0
+    # And it is stored as one price, not as that price repeated down a row.
+    assert p.flat_revenue is not None
+    assert p.revenue is None
 
 
 def test_assignment_must_not_vary_within_a_subscriber():

@@ -52,7 +52,7 @@ import numpy as np
 from .diagnostics import warn_on_srm
 from .estimators import ArmSummary, LiftResult, _interval, _resolve_horizon
 from .exceptions import NotIdentifiedError, PanelError
-from .panel import SubscriberPanel
+from .panel import SubscriberPanel, stratum_codes
 
 __all__ = ["occupancy_lift"]
 
@@ -230,14 +230,7 @@ def _stratified(panel, outcome, observable, horizon, strata, notes):
     if missing:
         raise PanelError(f"Strata column(s) {missing} not in the panel's covariates.")
 
-    as_str = panel.covariates[strata].astype(str)
-    first = as_str[strata[0]]
-    key = (
-        first.str.cat([as_str[c] for c in strata[1:]], sep="|").to_numpy()
-        if len(strata) > 1
-        else first.to_numpy()
-    )
-    levels, codes = np.unique(key, return_inverse=True)
+    codes, levels = stratum_codes(panel.covariates, strata)
 
     n = panel.n_subjects
     psi, control_psi = np.zeros(n), np.zeros(n)

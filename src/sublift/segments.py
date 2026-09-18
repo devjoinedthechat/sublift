@@ -65,8 +65,9 @@ from scipy import stats
 
 from .estimators import _arm_weights, _fit_arm, _require_two_arms, _resolve_horizon
 from .exceptions import NotIdentifiedError, PanelError
-from .multiarm import _calibrate, _correlation
-from .panel import SubscriberPanel
+from .family import calibrate as _calibrate
+from .family import correlation as _correlation
+from .panel import SubscriberPanel, stratum_codes
 
 __all__ = ["segment_scan", "SegmentScan", "SegmentEffect", "Heterogeneity"]
 
@@ -332,15 +333,21 @@ def segment_scan(
     )
 
     definitions = _definitions(panel, list(by), cross)
-    rows, psi_rows, control_rows = [], [], []
+    # Preallocated and filled in place: collecting rows in a list and vstacking them
+    # holds the whole influence matrix twice, which at ten million subscribers is a
+    # gigabyte spent on a copy.
+    psi = np.empty((len(definitions), n))
+    rows, control_rows = [], []
     for dimension, label, mask in definitions:
         sizes = [int((mask & (panel.arm == a)).sum()) for a in (0, 1)]
         if min(sizes) < min_per_arm:
             notes.append(f"{dimension}={label} dropped: {sizes[0]} control / {sizes[1]} treatment")
             continue
-        value, psi, control_value, control_psi = _contrast(panel, mask, horizon, weights, allow_extrapolation)
+        value, influence, control_value, control_psi = _contrast(
+            panel, mask, horizon, weights, allow_extrapolation
+        )
+        psi[len(rows)] = influence
         rows.append((dimension, label, mask, sizes, value, control_value))
-        psi_rows.append(psi)
         control_rows.append((control_value, control_psi))
 
     if not rows:
@@ -349,7 +356,7 @@ def segment_scan(
             "segments, or lower min_per_arm and read the result as exploratory."
         )
 
-    psi = np.vstack(psi_rows)
+    psi = psi[: len(rows)]
     estimates = np.array([r[4] for r in rows])
     control_values = np.array([r[5] for r in rows])
     cov = (psi @ psi.T) / (n**2)
@@ -364,8 +371,11 @@ def segment_scan(
     # The interaction contrast carries the uncertainty of both terms, including
     # their covariance -- the segment is part of the pooled estimate it is being
     # compared against, so the two are far from independent.
-    interaction_psi = psi - overall_psi[None, :]
-    interaction_se = np.sqrt(np.diag((interaction_psi @ interaction_psi.T) / (n**2)))
+    # Var(psi_j - overall) expands into terms already computed, so the differenced
+    # influence matrix never has to exist.
+    cross = psi @ overall_psi
+    overall_var = float(overall_psi @ overall_psi)
+    interaction_se = np.sqrt(np.maximum(np.diag(cov) - 2 * cross / (n**2) + overall_var / (n**2), 0.0))
     interactions = estimates - overall_value
 
     relatives = np.divide(
@@ -430,20 +440,14 @@ def _definitions(panel, by, cross):
     """(dimension, label, mask) for every segment to be examined."""
     covariates = panel.covariates
     if cross:
-        as_str = covariates[by].astype(str)
-        first = as_str[by[0]]
-        key = (
-            first.str.cat([as_str[c] for c in by[1:]], sep=" x ").to_numpy()
-            if len(by) > 1
-            else first.to_numpy()
-        )
+        codes, labels = stratum_codes(covariates[by], by, sep=" x ")
         name = " x ".join(by)
-        return [(name, label, key == label) for label in sorted(np.unique(key))]
+        return [(name, label, codes == index) for index, label in enumerate(labels)]
 
     out = []
     for column in by:
-        values = covariates[column].astype(str).to_numpy()
-        out.extend((column, label, values == label) for label in sorted(np.unique(values)))
+        codes, labels = stratum_codes(covariates[[column]], [column])
+        out.extend((column, label, codes == index) for index, label in enumerate(labels))
     return out
 
 

@@ -39,7 +39,7 @@ from .diagnostics import warn_on_srm
 from .exceptions import NotIdentifiedError
 from .influence import contrast_influence, value_influence
 from .logistic import design_matrix, fit_logistic
-from .panel import SubscriberPanel
+from .panel import SubscriberPanel, stratum_codes
 from .survival import empirical_revenue_weights, fit_survival, weighted_value
 
 __all__ = ["incremental_ltv", "retained_periods_lift", "LiftResult", "ArmSummary"]
@@ -419,7 +419,7 @@ def _arm_weights(panel, horizon, metric, price) -> dict[int, tuple[np.ndarray, b
         sched = _fit_schedule(price, horizon)
         return dict.fromkeys((0, 1), (sched, False))
 
-    if panel.revenue is None:
+    if not panel.has_revenue:
         raise ValueError(
             "No revenue in the panel and no price= given, so LTV cannot be formed. Pass "
             "price=..., build the panel with revenue=..., or ask for retained_periods_lift()."
@@ -427,8 +427,18 @@ def _arm_weights(panel, horizon, metric, price) -> dict[int, tuple[np.ndarray, b
     out = {}
     for a in (0, 1):
         m = panel.arm == a
-        out[a] = (empirical_revenue_weights(panel.revenue[m], panel.n_periods[m], horizon), True)
+        out[a] = (_weights_for(panel, m, horizon), True)
     return out
+
+
+def _weights_for(panel, mask, horizon: int) -> np.ndarray:
+    """Period revenue weights from whichever revenue representation the panel holds."""
+    return empirical_revenue_weights(
+        panel.revenue[mask] if panel.revenue is not None else None,
+        panel.n_periods[mask],
+        horizon,
+        flat=panel.flat_revenue[mask] if panel.flat_revenue is not None else None,
+    )
 
 
 def _fit_schedule(price, horizon: int) -> np.ndarray:
@@ -463,6 +473,7 @@ def _fit_arm(panel, mask, horizon, weights, allow_extrapolation):
         panel.event[mask],
         w,
         revenue=panel.revenue[mask] if (estimated and panel.revenue is not None) else None,
+        flat_revenue=(panel.flat_revenue[mask] if (estimated and panel.flat_revenue is not None) else None),
     )
     return surv, value, inf, w
 
@@ -526,14 +537,7 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
     if missing:
         raise ValueError(f"Strata column(s) {missing} not in the panel's covariates.")
 
-    as_str = panel.covariates[strata].astype(str)
-    first = as_str[strata[0]]
-    key = (
-        first.str.cat([as_str[c] for c in strata[1:]], sep="|").to_numpy()
-        if len(strata) > 1
-        else first.to_numpy()
-    )
-    levels, codes = np.unique(key, return_inverse=True)
+    codes, levels = stratum_codes(panel.covariates, strata)
 
     n = panel.n_subjects
     psi = np.zeros(n)

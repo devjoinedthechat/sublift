@@ -199,8 +199,13 @@ def test_missing_cause_on_a_churned_subscriber_is_rejected():
         )
 
 
-def test_flat_price_is_broadcast_across_periods():
+def test_a_flat_price_is_stored_once_and_expanded_on_demand():
+    """Repeating one number across every period costs twelve times the memory."""
     p = build(price=9.0)
-    assert p.revenue.shape == (4, int(p.n_periods.max()))
-    assert p.revenue[0, 0] == 9.0
-    assert np.isnan(p.revenue[3, 1])
+    assert p.revenue is None
+    assert p.flat_revenue is not None and p.has_revenue
+
+    grid = p.revenue_grid()
+    assert grid.shape == (4, int(p.n_periods.max()))
+    assert grid[0, 0] == 9.0
+    assert np.isnan(grid[3, 1])  # beyond that subscriber's observed periods
