@@ -104,6 +104,7 @@ class MultiArmResult:
         return found[0] if found else None
 
     def to_frame(self) -> pd.DataFrame:
+        """One row per contrast."""
         return pd.DataFrame(
             [
                 {
@@ -169,6 +170,7 @@ class MultiArmResult:
         }
 
     def summary(self) -> str:
+        """Each arm against the control, best first, with the correction stated."""
         unit = "revenue" if self.metric == "ltv" else "periods"
         head = f"{len(self.contrasts)} arms vs {self.control_label}, over {self.horizon} billing periods"
         width = max(len(c.label) for c in self.contrasts)

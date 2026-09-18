@@ -400,9 +400,11 @@ class OccupancyDecomposition:
     n_subjects: int
 
     def share(self, cause: LapseCause) -> float:
+        """Fraction of the overall effect running through this cause."""
         return cause.estimate / self.total if self.total else float("nan")
 
     def summary(self) -> str:
+        """Periods paid for, split by what was keeping subscribers away."""
         head = f"Periods paid for, by what was keeping subscribers away ({self.horizon} periods)"
         width = max(len(c.label) for c in self.causes)
         lines = [

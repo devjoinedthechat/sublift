@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sublift"
-version = "0.1.0"
+version = "0.2.0"
 description = "Incremental LTV measurement for subscription retention experiments: censored outcomes, discrete billing periods, anytime-valid inference."
 readme = "README.md"
 license = "Apache-2.0"

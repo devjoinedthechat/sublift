@@ -100,6 +100,7 @@ class SegmentEffect:
 
     @property
     def name(self) -> str:
+        """``dimension=level``, the segment's label in a scan."""
         return f"{self.dimension}={self.label}"
 
     @property
@@ -185,6 +186,7 @@ class SegmentScan:
         )
 
     def to_frame(self) -> pd.DataFrame:
+        """One row per segment, with both scales and the interaction."""
         return pd.DataFrame(
             [
                 {
@@ -206,6 +208,7 @@ class SegmentScan:
         )
 
     def summary(self) -> str:
+        """Heterogeneity first, then the segments, then what survives."""
         unit = "revenue" if self.metric == "ltv" else "periods"
         head = f"Effect by segment, over {self.horizon} billing periods"
         lines = [

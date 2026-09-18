@@ -50,16 +50,19 @@ class RandomizationCheck:
 
     @property
     def srm_flagged(self) -> bool:
+        """Whether the arm sizes differ by more than randomisation explains."""
         return self.srm_p_value < self.srm_alpha
 
     @property
     def imbalanced(self) -> list[str]:
+        """Covariates whose standardized difference exceeds the threshold."""
         if self.balance is None:
             return []
         return self.balance.loc[self.balance["std_diff"].abs() > self.smd_threshold, "covariate"].tolist()
 
     @property
     def ok(self) -> bool:
+        """No sample ratio mismatch and no imbalanced covariate."""
         return not self.srm_flagged and not self.imbalanced
 
     def __str__(self) -> str:
@@ -212,10 +215,12 @@ class CensoringCheck:
 
     @property
     def depends_on_covariates(self) -> bool:
+        """Whether censoring is predicted by the covariates tested."""
         return (not self.known_exactly) and self.lr_p_value < self.alpha
 
     @property
     def ok(self) -> bool:
+        """Censoring is known to be administrative, or shows no covariate dependence."""
         return self.known_exactly or not self.depends_on_covariates
 
     def __str__(self) -> str:

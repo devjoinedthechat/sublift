@@ -115,10 +115,12 @@ class LiftResult:
 
     @property
     def control(self) -> ArmSummary:
+        """The control arm's summary."""
         return self.arms[next(iter(self.arms))]
 
     @property
     def treatment(self) -> ArmSummary:
+        """The treatment arm's summary."""
         return self.arms[list(self.arms)[1]]
 
     @property
@@ -193,7 +195,13 @@ class LiftResult:
         )
 
     def curves(self) -> pd.DataFrame:
-        """Per-arm survival and cumulative value, period by period."""
+        """Per-arm survival and cumulative value, period by period.
+
+        Point estimates only. For a curve to plot, use
+        :func:`sublift.survival_curves`, which carries pointwise intervals and a
+        band simultaneous across every period -- the second being the honest one
+        when the plot is read rather than a single pre-chosen period quoted.
+        """
         rows = []
         for label, arm in self.arms.items():
             lagged = np.concatenate(([1.0], arm.survival[:-1]))
@@ -212,6 +220,7 @@ class LiftResult:
         return pd.concat(rows, ignore_index=True)
 
     def summary(self) -> str:
+        """The estimate, its intervals, the arms behind it, and any caveats."""
         from .report import format_result
 
         return format_result(self)

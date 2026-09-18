@@ -74,12 +74,14 @@ class CorrectedFamily:
 
     @property
     def mean_correlation(self) -> float:
+        """Average correlation between the family's comparisons."""
         k = len(self.members)
         if k < 2:
             return float("nan")
         return float(self.correlation[np.triu_indices(k, 1)].mean())
 
     def to_frame(self) -> pd.DataFrame:
+        """One row per comparison, raw and adjusted."""
         return pd.DataFrame(
             [
                 {
@@ -97,6 +99,7 @@ class CorrectedFamily:
         )
 
     def summary(self) -> str:
+        """Each comparison with its simultaneous interval, and what the correction cost."""
         head = f"{len(self.members)} comparisons, corrected together"
         width = max(len(m.label) for m in self.members)
         lines = [head, "=" * len(head), ""]

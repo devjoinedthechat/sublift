@@ -62,6 +62,7 @@ class SensitivityPoint:
 
     @property
     def excludes_zero(self) -> bool:
+        """Whether the interval at this gamma still excludes zero."""
         if self.ci[0] != self.ci[0]:  # NaN: no bootstrap was run
             return abs(self.estimate) > 0
         return self.ci[0] > 0 or self.ci[1] < 0
@@ -84,6 +85,7 @@ class CensoringSensitivity:
         return self.points[0]
 
     def to_frame(self) -> pd.DataFrame:
+        """One row per value of gamma."""
         return pd.DataFrame(
             [
                 {
@@ -99,6 +101,7 @@ class CensoringSensitivity:
         )
 
     def summary(self) -> str:
+        """The sweep, the tipping point, and what it means."""
         head = f"Censoring sensitivity over {self.horizon} billing periods"
         base = self.baseline
         lines = [

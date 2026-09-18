@@ -59,3 +59,28 @@ Fix the horizon your decision needs beforehand. Read this to understand the shap
 it, and to notice when the data ran out before the effect did. Picking the horizon that
 looks best is not something any correction repairs, because the correction is over the
 horizons you *report*, not the ones you considered.
+
+
+## Plotting the curves
+
+```python
+frame = sl.survival_curves(panel, horizon=12)
+```
+
+One row per arm and period, plus rows for the **difference** between arms — usually the curve
+worth plotting, since its distance from zero is the finding. Columns: `survival`, `se`,
+`ci_low`/`ci_high` (pointwise) and `band_low`/`band_high` (simultaneous across every period
+shown).
+
+Use the band. A pointwise interval is right for one period chosen in advance, and nobody looks at
+a plotted curve that way — they look for where the lines separate, which is a search over every
+period. Both are computed together because the only honest way to show the pointwise interval is
+next to the one that says what looking costs.
+
+Both are verified: over 250 replications the pointwise interval covers each period about 95% of
+the time, and the simultaneous band contains the **whole** curve about 95% of the time.
+
+It costs almost nothing. The influence function of `S(t)` depends on a subscriber only through
+their last observed period and whether they churned — at most `2H` distinct values however many
+million subscribers there are — so the entire covariance across periods is a sum over those
+groups. Two million subscribers takes five seconds and 42 MB.

@@ -21,6 +21,7 @@ the horizon is explicit, voluntary and involuntary churn are separable, and the
 intervals stay valid when you look at them every day.
 """
 
+from .bands import survival_curves
 from .competing import CauseEffect, ChurnDecomposition, churn_decomposition
 from .compliance import ComplierEffect, complier_effect
 from .cuped import cuped
@@ -55,7 +56,7 @@ from .survival import DiscreteSurvival, fit_survival, weighted_value
 from .trajectory import HorizonCurve, HorizonPoint, lift_by_horizon
 from .uplift import QiniCurve, qini, uplift_scores
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "SubscriberPanel",
@@ -95,6 +96,7 @@ __all__ = [
     "ArmSummary",
     "confidence_sequence",
     "ConfidenceSequence",
+    "survival_curves",
     "lift_by_horizon",
     "HorizonCurve",
     "HorizonPoint",

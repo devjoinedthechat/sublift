@@ -43,6 +43,7 @@ class ConfidenceSequence:
 
     @property
     def excludes_zero(self) -> bool:
+        """Whether the anytime-valid interval currently excludes zero."""
         return self.lower > 0 or self.upper < 0
 
     @property

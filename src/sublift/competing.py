@@ -65,6 +65,7 @@ class CauseEffect:
 
     @property
     def p_value(self) -> float:
+        """Two-sided p-value for this cause, for a single look."""
         return float(2 * stats.norm.sf(abs(self.estimate / self.se))) if self.se else float("nan")
 
 
@@ -84,6 +85,7 @@ class ChurnDecomposition:
         return cause.estimate / self.total if self.total else float("nan")
 
     def to_frame(self) -> pd.DataFrame:
+        """One row per cause, with periods lost in each arm."""
         rows = [
             {
                 "cause": c.label,
@@ -100,6 +102,7 @@ class ChurnDecomposition:
         return pd.DataFrame(rows)
 
     def summary(self) -> str:
+        """The total, then each cause's share of it."""
         head = f"Retention effect by cause of churn, over {self.horizon} billing periods"
         lines = [
             head,

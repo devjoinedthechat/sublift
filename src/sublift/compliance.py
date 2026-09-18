@@ -63,6 +63,7 @@ class ComplierEffect:
 
     @property
     def p_value(self) -> float:
+        """Two-sided p-value for the complier effect, for a single look."""
         return float(2 * stats.norm.sf(abs(self.estimate / self.se))) if self.se else float("nan")
 
     def confidence_sequence(self, *, n_target: int | None = None, alpha: float | None = None):
@@ -77,6 +78,7 @@ class ComplierEffect:
         )
 
     def summary(self) -> str:
+        """Both numbers, and a line saying which decision each one is for."""
         unit = "revenue" if self.metric == "ltv" else "periods"
         head = f"Effect among the exposed, over {self.horizon} billing periods"
         lines = [

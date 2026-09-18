@@ -46,6 +46,7 @@ class DiscreteSurvival:
 
     @property
     def horizon(self) -> int:
+        """Last period the curve covers."""
         return int(self.periods[-1])
 
     @property

@@ -95,6 +95,7 @@ class HorizonCurve:
         return float(rates[-1] / peak) if peak else float("nan")
 
     def to_frame(self) -> pd.DataFrame:
+        """One row per horizon, pointwise and simultaneous."""
         return pd.DataFrame(
             [
                 {
@@ -112,6 +113,7 @@ class HorizonCurve:
         )
 
     def summary(self) -> str:
+        """The effect at each horizon, and what the trajectory's shape means."""
 
         head = "Effect as the horizon extends"
         lines = [

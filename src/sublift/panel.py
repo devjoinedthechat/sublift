@@ -601,10 +601,12 @@ class SubscriberPanel:
 
     @property
     def n_subjects(self) -> int:
+        """How many subscribers the panel holds."""
         return len(self.subject)
 
     @property
     def n_arms(self) -> int:
+        """How many arms, counting the control."""
         return len(self.arm_labels)
 
     @property

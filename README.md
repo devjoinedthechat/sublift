@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml"><img src="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.10–3.13">
-  <img src="https://img.shields.io/badge/tests-318-brightgreen" alt="318 tests">
+  <img src="https://img.shields.io/badge/tests-328-brightgreen" alt="328 tests">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <img src="https://img.shields.io/badge/dependencies-numpy%20%C2%B7%20scipy%20%C2%B7%20pandas-lightgrey" alt="numpy · scipy · pandas">
@@ -204,6 +204,13 @@ cancel and resubscribe, or pause over the summer. Time-to-first-cancellation can
 and the error runs the wrong way: the subscribers written off as lost are disproportionately in
 the *control* arm, so at a 20% win-back rate it overstates the win by **44%**.
 
+**[Curves you can plot](docs/horizons.md#plotting-the-curves)** — `survival_curves`. The first
+thing anyone does with a retention experiment is plot the two curves, and without bands that plot
+is an assertion. Returns both arms and their difference with pointwise intervals *and* a band
+simultaneous across every period — the second being the honest one, because people do not look at
+a curve and then make a statement about period seven; they look for where the lines separate,
+which is a search the pointwise interval does not cover. Both verified to cover at 95%.
+
 **[How the effect develops](docs/horizons.md)** — `lift_by_horizon`. Every readout here is at
 one stated horizon, which answers *how much* and never *when*. An offer that buys three months
 and then fades has the same twelve-period number as one that keeps buying, and they are not the
@@ -390,6 +397,7 @@ a hot path is easy and no correctness test would catch it.
 | `LiftResult.confidence_sequence` | anytime-valid interval |
 | `LiftResult.relative_ci` | interval for the % lift (delta method, not `ci / control`) |
 | `LiftResult.curves` | per-arm survival and cumulative value |
+| `survival_curves` | curves to plot, with pointwise and simultaneous bands |
 | `lift_by_horizon` | the effect's trajectory, with simultaneous bands |
 | `duration_to_detect` | how long until this test can answer |
 | `qini` / `uplift_scores` | targeting |

@@ -72,6 +72,7 @@ class ExperimentReview:
         return self.value or self.retention
 
     def summary(self) -> str:
+        """The verdict, the findings that produced it, then the estimates."""
         lines = ["Experiment review", "=================", ""]
 
         if self.blocked:
