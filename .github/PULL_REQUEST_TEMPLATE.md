@@ -13,8 +13,7 @@
 - [ ] If this touches an estimator or an interval: `pytest -m slow` passes, and there is a
       coverage test in `tests/test_validation.py` asserting it is unbiased and covers at its
       nominal rate against known truth
-- [ ] If this changes an existing estimate: noted in `CHANGELOG.md` under **Changed**, with the
-      reasoning
+- [ ] If this changes an existing estimate: the PR description says so and why
 - [ ] Docstrings say *why*, not *what*
 
 <!--

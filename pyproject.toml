@@ -37,13 +37,12 @@ dev = [
 Homepage = "https://github.com/devjoinedthechat/sublift"
 Repository = "https://github.com/devjoinedthechat/sublift"
 Issues = "https://github.com/devjoinedthechat/sublift/issues"
-Changelog = "https://github.com/devjoinedthechat/sublift/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sublift"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "tests/", "examples/", "docs/", "README.md", "CHANGELOG.md", "LICENSE"]
+include = ["src/", "tests/", "examples/", "docs/", "README.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

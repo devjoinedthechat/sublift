@@ -52,6 +52,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import stats
 
+from .clustering import influence_se
 from .diagnostics import warn_on_srm
 from .estimators import ArmSummary, LiftResult, _interval, _resolve_horizon
 from .exceptions import NotIdentifiedError, PanelError
@@ -137,7 +138,7 @@ def occupancy_lift(
 
     estimate = values[1] - values[0]
     n = psi.size
-    se = float(np.sqrt((psi**2).sum()) / n)
+    se = influence_se(psi, _codes_for(panel, psi), n)
     ci = _interval(estimate, se, alpha, None)
 
     arms = {}
@@ -166,6 +167,7 @@ def occupancy_lift(
         inference="influence",
         influence=psi,
         control_influence=control_psi,
+        cluster=_codes_for(panel, psi),
         strata_used=list(strata) if strata else None,
         covariates_used=list(covariates) if covariates else None,
         randomization=randomization,
@@ -174,6 +176,15 @@ def occupancy_lift(
 
 
 # ----------------------------------------------------------------- internals
+
+
+def _codes_for(panel, psi):
+    """Cluster codes, restricted when stratification dropped some subscribers."""
+    if panel.cluster is None:
+        return None
+    if psi.size == panel.n_subjects:
+        return panel.cluster
+    return None  # a dropped stratum leaves the mapping ambiguous; fall back to independent
 
 
 def _outcome(panel: SubscriberPanel, horizon: int, metric: str, price) -> np.ndarray:
@@ -460,7 +471,7 @@ def occupancy_decomposition(
         # Periods *saved* is minus the change in periods lost, so the sign flips.
         estimate = -(values[1] - values[0])
         psi = -psi
-        se = float(np.sqrt((psi**2).sum()) / n)
+        se = influence_se(psi, panel.cluster, n)
         causes.append(
             LapseCause(
                 label=label,
@@ -474,7 +485,7 @@ def occupancy_decomposition(
         total += estimate
         total_psi += psi
 
-    total_se = float(np.sqrt((total_psi**2).sum()) / n)
+    total_se = influence_se(total_psi, panel.cluster, n)
     return OccupancyDecomposition(
         horizon=horizon,
         total=total,

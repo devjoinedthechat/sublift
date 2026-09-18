@@ -40,6 +40,13 @@ class SubscriberPanel:
         distribution be computed exactly instead of estimated. Populated
         automatically by :meth:`from_spans`.
 
+    ``cluster``
+        Optional. The unit that was actually randomised, when it is coarser than
+        the subscription -- an account with several subscriptions, a household
+        sharing a card. Intervals then treat clusters as the independent units,
+        which is what they are. Without it a dependent panel reports intervals
+        that are too narrow and says nothing about it.
+
     ``flat_revenue``
         Optional, and the usual case: one price per subscriber rather than a
         subscriber-by-period grid. A grid of the same number repeated twelve
@@ -82,6 +89,7 @@ class SubscriberPanel:
     potential_followup: np.ndarray | None = field(default=None, repr=False)
     active: np.ndarray | None = field(default=None, repr=False)
     flat_revenue: np.ndarray | None = field(default=None, repr=False)
+    cluster: np.ndarray | None = field(default=None, repr=False)
     lapsed_cause: np.ndarray | None = field(default=None, repr=False)
     lapsed_labels: tuple[str, ...] = ()
 
@@ -100,6 +108,7 @@ class SubscriberPanel:
         covariates: Sequence[str] | None = None,
         revenue: str | None = None,
         cause: str | None = None,
+        cluster: str | None = None,
     ) -> SubscriberPanel:
         """Build from one row per subject.
 
@@ -119,7 +128,7 @@ class SubscriberPanel:
             (intro pricing, annual step-ups) use :meth:`from_periods`.
         """
         cols = [subject, arm, periods, event] + ([revenue] if revenue else [])
-        cols += ([cause] if cause else []) + list(covariates or [])
+        cols += ([cause] if cause else []) + ([cluster] if cluster else []) + list(covariates or [])
         _require_columns(df, cols)
 
         if df[subject].duplicated().any():
@@ -148,6 +157,7 @@ class SubscriberPanel:
             arm_labels=labels,
             covariates=df[list(covariates)].reset_index(drop=True) if covariates else None,
             flat_revenue=per_subject,
+            cluster=_as_cluster(df[cluster] if cluster else None, cluster),
             cause=codes,
             cause_labels=cause_labels,
         )
@@ -166,6 +176,7 @@ class SubscriberPanel:
         revenue: str | None = None,
         cause: str | None = None,
         potential_followup: str | None = None,
+        cluster: str | None = None,
     ) -> SubscriberPanel:
         """Build from one row per subject-period (the long / panel form).
 
@@ -178,6 +189,7 @@ class SubscriberPanel:
         """
         cols = [subject, period, churned, arm] + ([revenue] if revenue else [])
         cols += ([cause] if cause else []) + ([potential_followup] if potential_followup else [])
+        cols += [cluster] if cluster else []
         cols += list(covariates or [])
         _require_columns(df, cols)
 
@@ -255,6 +267,7 @@ class SubscriberPanel:
             covariates=cov,
             revenue=rev,
             flat_revenue=flat,
+            cluster=_as_cluster(first[cluster] if cluster else None, cluster),
             cause=codes,
             cause_labels=cause_labels,
             potential_followup=potential,
@@ -275,6 +288,7 @@ class SubscriberPanel:
         covariates: Sequence[str] | None = None,
         price: str | float | None = None,
         cause: str | None = None,
+        cluster: str | None = None,
     ) -> SubscriberPanel:
         """Build from subscription dates -- the shape warehouse data actually arrives in.
 
@@ -309,6 +323,7 @@ class SubscriberPanel:
         cols = [subject, arm, assigned_at, ended_at] + list(covariates or [])
         cols += [observed_through] if isinstance(observed_through, str) and observed_through in df else []
         cols += [cause] if cause else []
+        cols += [cluster] if cluster else []
         cols += [price] if isinstance(price, str) else []
         _require_columns(df, cols)
 
@@ -367,6 +382,7 @@ class SubscriberPanel:
             arm_labels=labels,
             covariates=df[list(covariates)].reset_index(drop=True) if covariates else None,
             flat_revenue=per_subject,
+            cluster=_as_cluster(df[cluster] if cluster else None, cluster),
             cause=codes,
             cause_labels=cause_labels,
             potential_followup=potential,
@@ -388,6 +404,7 @@ class SubscriberPanel:
         covariates: Sequence[str] | None = None,
         price: str | float | None = None,
         spell_cause: str | None = None,
+        cluster: str | None = None,
     ) -> SubscriberPanel:
         """Build from one row per subscriber-*spell*, for subscriptions that come back.
 
@@ -534,6 +551,7 @@ class SubscriberPanel:
             arm_labels=labels,
             covariates=cov,
             flat_revenue=per_subject,
+            cluster=_as_cluster(first[cluster] if cluster else None, cluster),
             potential_followup=potential,
             active=active,
             lapsed_cause=lapsed_cause,
@@ -551,6 +569,8 @@ class SubscriberPanel:
             raise PanelError("Panel is empty.")
         if self.revenue is not None and self.revenue.shape[0] != n:
             raise PanelError("revenue matrix must have one row per subject.")
+        if self.cluster is not None and len(self.cluster) != n:
+            raise PanelError("cluster must have one entry per subject.")
         if self.flat_revenue is not None and len(self.flat_revenue) != n:
             raise PanelError("flat_revenue must have one entry per subject.")
         if self.active is not None and self.active.shape[0] != n:
@@ -668,6 +688,7 @@ class SubscriberPanel:
             ),
             active=self.active[idx] if self.active is not None else None,
             flat_revenue=(self.flat_revenue[idx] if self.flat_revenue is not None else None),
+            cluster=_recode(self.cluster, idx),
             lapsed_cause=self.lapsed_cause[idx] if self.lapsed_cause is not None else None,
             lapsed_labels=self.lapsed_labels,
         )
@@ -736,6 +757,7 @@ class SubscriberPanel:
             ),
             active=self.active[idx] if self.active is not None else None,
             flat_revenue=(self.flat_revenue[idx] if self.flat_revenue is not None else None),
+            cluster=_recode(self.cluster, idx),
             lapsed_cause=self.lapsed_cause[idx] if self.lapsed_cause is not None else None,
             lapsed_labels=self.lapsed_labels,
         )
@@ -1000,3 +1022,19 @@ def _lapse_grid(
     carried = np.where(np.isnan(forward), -1, forward).astype(np.int16)
     carried[active] = -1
     return carried, labels
+
+
+def _recode(cluster: np.ndarray | None, idx: np.ndarray) -> np.ndarray | None:
+    """Re-densify cluster codes after subsetting, so they stay 0..k-1 with no gaps."""
+    if cluster is None:
+        return None
+    return np.unique(cluster[idx], return_inverse=True)[1].astype(np.int64)
+
+
+def _as_cluster(series: pd.Series | None, name: str | None) -> np.ndarray | None:
+    """Dense integer codes for the randomisation unit."""
+    if series is None:
+        return None
+    if series.isna().any():
+        raise PanelError(f"{name!r} has missing values; every subject needs a cluster.")
+    return pd.factorize(series, sort=True)[0].astype(np.int64)

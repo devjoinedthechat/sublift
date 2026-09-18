@@ -36,7 +36,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from .estimators import _fit_arm, _resolve_horizon
+from .clustering import cluster_sums
+from .estimators import _fit_arm, _kept_codes, _resolve_horizon
 from .exceptions import NotIdentifiedError, PanelError
 from .family import calibrate as _calibrate
 from .family import correlation as _correlation
@@ -272,7 +273,8 @@ def multi_arm_lift(
     estimates, psi = _contrast_rows(pairs, values, arm_psi, stratified)
     k = len(pairs)
     n = panel.n_subjects
-    cov = (psi @ psi.T) / (n**2)
+    clustered = cluster_sums(psi, _kept_codes(panel.cluster, None))
+    cov = (clustered @ clustered.T) / (n**2)
     se = np.sqrt(np.diag(cov))
     z_scores = np.divide(estimates, se, out=np.zeros_like(estimates), where=se > 0)
     raw_p = 2 * stats.norm.sf(np.abs(z_scores))

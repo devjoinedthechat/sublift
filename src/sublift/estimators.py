@@ -35,6 +35,7 @@ import pandas as pd
 from scipy import stats
 
 from .censoring import censoring_survival, conditional_censoring_survival
+from .clustering import influence_se
 from .diagnostics import warn_on_srm
 from .exceptions import NotIdentifiedError
 from .influence import contrast_influence, value_influence
@@ -48,6 +49,15 @@ _ESTIMATORS = ("unadjusted", "stratified", "adjusted")
 
 # Below this the one-step estimator's first-order variance is measurably optimistic.
 _ADJUSTED_MIN_N = 5_000
+
+
+def _kept_codes(cluster, kept):
+    """Cluster codes restricted to the subscribers an estimator actually used."""
+    if cluster is None:
+        return None
+    if kept is None:
+        return cluster
+    return np.unique(cluster[kept], return_inverse=True)[1].astype(np.int64)
 
 
 def _require_two_arms(panel: SubscriberPanel) -> None:
@@ -96,6 +106,7 @@ class LiftResult:
     control_influence: np.ndarray | None = field(default=None, repr=False)
     bootstrap_relative: np.ndarray | None = field(default=None, repr=False)
     randomization: object | None = field(default=None, repr=False)
+    cluster: np.ndarray | None = field(default=None, repr=False)
     strata_used: list[str] | None = None
     covariates_used: list[str] | None = None
     notes: list[str] = field(default_factory=list)
@@ -143,7 +154,7 @@ class LiftResult:
             return (float("nan"), float("nan"))
         ratio = self.relative
         psi = (self.influence - ratio * self.control_influence) / v0
-        se = float(np.sqrt((psi**2).sum()) / psi.size)
+        se = influence_se(psi, self.cluster, psi.size)
         return float(ratio - z * se), float(ratio + z * se)
 
     @property
@@ -172,8 +183,10 @@ class LiftResult:
                 "expose per-subject influence values. Use estimator='stratified' to monitor a "
                 "running experiment; it reduces variance and stays sequentially valid."
             )
+        from .clustering import sequence_terms
+
         return _cs(
-            self.influence,
+            sequence_terms(self.influence, self.cluster, self.influence.size),
             estimate=self.estimate,
             alpha=self.alpha if alpha is None else alpha,
             n_target=n_target,
@@ -383,6 +396,7 @@ def _estimate(
         influence=out.get("influence"),
         bootstrap_draws=out.get("boot"),
         control_influence=out.get("control_influence"),
+        cluster=_kept_codes(panel.cluster, out.get("kept")),
         bootstrap_relative=out.get("boot_relative"),
         randomization=randomization,
         strata_used=list(strata) if strata and estimator == "stratified" else None,
@@ -507,7 +521,7 @@ def _unadjusted(panel, horizon, weights, allow_extrapolation):
 
     return {
         "estimate": estimate,
-        "se": float(np.sqrt((psi**2).sum()) / n),
+        "se": influence_se(psi, panel.cluster, n),
         "arms": arms,
         "influence": psi,
         "control_influence": psi_control,
@@ -584,7 +598,7 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
     psi = psi[kept] + (deltas[codes[kept]] - estimate)
     psi_control = psi_control[kept] + (control_values[codes[kept]] - control_total)
     m = int(kept.sum())
-    se = float(np.sqrt((psi**2).sum()) / m)
+    se = influence_se(psi, _kept_codes(panel.cluster, kept), m)
 
     arms = {}
     for a in (0, 1):
@@ -608,6 +622,7 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
         "influence": psi,
         "control_influence": psi_control,
         "inference": "influence",
+        "kept": kept,
     }
 
 
@@ -751,7 +766,7 @@ def _adjusted(
     notes.append(f"censoring distribution: {gbar_source}")
     return {
         "estimate": values[1] - values[0],
-        "se": float(np.sqrt((psi**2).sum()) / n),
+        "se": influence_se(psi, panel.cluster, n),
         "arms": arms,
         "influence": psi,
         "control_influence": -eifs[0],

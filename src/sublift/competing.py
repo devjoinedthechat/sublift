@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from .clustering import influence_se
 from .exceptions import NotIdentifiedError, PanelError
 from .panel import SubscriberPanel
 from .survival import fit_survival
@@ -185,7 +186,7 @@ def churn_decomposition(
         # terms carry the opposite sign to the usual contrast.
         psi[panel.arm == 1] = -per_arm[1]["influence"][j] / p[1]
         psi[panel.arm == 0] = per_arm[0]["influence"][j] / p[0]
-        se = float(np.sqrt((psi**2).sum()) / n)
+        se = influence_se(psi, panel.cluster, n)
         causes.append(
             CauseEffect(
                 label=label,
@@ -199,7 +200,7 @@ def churn_decomposition(
         total_psi += psi
 
     total = float(sum(c.estimate for c in causes))
-    total_se = float(np.sqrt((total_psi**2).sum()) / n)
+    total_se = influence_se(total_psi, panel.cluster, n)
     return ChurnDecomposition(
         horizon=horizon,
         total=total,
