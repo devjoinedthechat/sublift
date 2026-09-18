@@ -11,6 +11,23 @@ slipped into a patch release.
 ## [Unreleased]
 
 ### Added
+- **`SubscriberPanel.from_spells` and `occupancy_lift`: subscriptions that come back.** People
+  cancel and resubscribe, or pause over the summer. Time-to-first-cancellation records a
+  subscriber who paid for periods 1–3 and 6–12 as churning at period 3.
+
+  The direction of that error is the opposite of what it looks like. Ignoring returns
+  **overstates** the treatment, because the subscribers written off as lost are
+  disproportionately in the control arm. Measured, holding everything else fixed: at a 10%
+  win-back hazard the first-spell estimate is 21% high, at 20% it is 44% high — and it reports
+  the *same number* at every rate, because it cannot see returns at all.
+
+  `occupancy_lift` targets expected billing periods *paid for* within the horizon, which does
+  not care whether they arrived in one run or three, and tracks the truth at every win-back rate.
+  On single-spell data it agrees with `retained_periods_lift` within a fraction of a standard
+  error; the product-limit is the more efficient of the two there, which is what you trade away.
+
+  A pause is a gap in the grid: retained, earning nothing. That matters because "pause instead
+  of cancel" is itself a retention intervention whose mechanism a survival model cannot express.
 - **`segment_scan`: effects by segment, without the slice becoming the finding.** "It didn't
   work overall, but it worked great for annual subscribers on iOS" is the most common way a
   retention experiment produces a false result. On a **null** experiment sliced eight ways,

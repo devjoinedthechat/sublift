@@ -32,6 +32,7 @@ from .diagnostics import (
 from .estimators import ArmSummary, LiftResult, incremental_ltv, retained_periods_lift
 from .exceptions import EstimationError, NotIdentifiedError, PanelError, SubliftError
 from .multiarm import ArmContrast, MultiArmResult, multi_arm_lift
+from .occupancy import occupancy_lift
 from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
 from .segments import Heterogeneity, SegmentEffect, SegmentScan, segment_scan
@@ -45,6 +46,7 @@ __all__ = [
     "SubscriberPanel",
     "incremental_ltv",
     "retained_periods_lift",
+    "occupancy_lift",
     "segment_scan",
     "SegmentScan",
     "SegmentEffect",

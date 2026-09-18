@@ -7,6 +7,7 @@
 | [Monitoring a running test](monitoring.md) | Why peeking breaks a p-value, and what to use instead |
 | [Testing several arms](multi-arm.md) | Many offers, one holdout, one error rate |
 | [Slicing the base](segments.md) | Segment scans that don't manufacture findings |
+| [Subscriptions that come back](win-backs.md) | Win-backs, pauses, and why first-cancellation overstates |
 | [Voluntary vs involuntary churn](competing-risks.md) | Competing risks, and why the split is exact |
 | [Assumptions](assumptions.md) | When sublift is wrong — read before you ship a decision |
 | [Method](method.md) | The estimand, the influence functions, the references |

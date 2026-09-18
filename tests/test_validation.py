@@ -17,6 +17,7 @@ from sublift import (
     check_censoring,
     churn_decomposition,
     multi_arm_lift,
+    occupancy_lift,
     retained_periods_lift,
     segment_scan,
     simulate_experiment,
@@ -530,3 +531,70 @@ def test_genuine_effect_modification_is_not_dismissed_as_one():
     assert not scan.scale_artefact
     names = {s.name for s in scan.credible_segments()}
     assert {"engagement_bucket=high", "engagement_bucket=low"} <= names
+
+
+# ------------------------------------------------------------ returning subscribers
+
+
+def test_occupancy_is_unbiased_and_covers_when_subscribers_return():
+    reps = 200
+    ests, ses, covered = [], [], 0
+    truth = None
+    for r in range(reps):
+        sim = simulate_experiment(
+            n=20_000,
+            horizon=8,
+            observation_window=13,
+            seed=5000 + r,
+            treatment_odds_ratio=0.85,
+            winback_hazard=0.10,
+        )
+        res = occupancy_lift(sim.panel, horizon=8)
+        ests.append(res.estimate)
+        ses.append(res.se)
+        covered += res.ci[0] <= sim.true_occupancy_lift <= res.ci[1]
+        truth = sim.true_occupancy_lift
+
+    e = np.array(ests)
+    assert abs(e.mean() - truth) < 3.5 * e.std(ddof=1) / np.sqrt(reps)
+    assert 0.92 <= covered / reps <= 0.99, f"coverage {covered / reps:.1%}"
+    assert 0.92 <= np.mean(ses) / e.std(ddof=1) <= 1.10
+
+
+def test_time_to_first_cancellation_overstates_the_win_when_people_come_back():
+    """The motivating claim, and its direction, which is easy to get backwards.
+
+    Ignoring returns does not understate the treatment. It overstates it, because
+    the subscribers written off as lost are disproportionately in the control arm.
+    The first-spell estimate barely moves as the win-back rate rises -- it cannot
+    see returns at all -- while the truth falls away beneath it.
+    """
+    reps = 60
+    results = {}
+    for winback in (1e-9, 0.20):
+        occupancy, survival, truth = [], [], None
+        for r in range(reps):
+            sim = simulate_experiment(
+                n=20_000,
+                horizon=8,
+                observation_window=13,
+                seed=6000 + r,
+                treatment_odds_ratio=0.85,
+                winback_hazard=winback,
+            )
+            occupancy.append(occupancy_lift(sim.panel, horizon=8).estimate)
+            survival.append(retained_periods_lift(sim.panel, horizon=8, estimator="unadjusted").estimate)
+            truth = sim.true_occupancy_lift
+        results[winback] = (float(np.mean(occupancy)), float(np.mean(survival)), truth)
+
+    quiet_occ, quiet_surv, quiet_truth = results[1e-9]
+    busy_occ, busy_surv, busy_truth = results[0.20]
+
+    # Both agree when nobody returns.
+    assert abs(quiet_surv - quiet_truth) < 0.02 * abs(quiet_truth) + 0.005
+    assert abs(quiet_occ - quiet_truth) < 0.02 * abs(quiet_truth) + 0.005
+    # With returns, occupancy follows the truth down and the first-spell view does not.
+    assert busy_truth < quiet_truth
+    assert abs(busy_occ - busy_truth) < 0.05 * busy_truth
+    assert busy_surv > busy_truth * 1.25, "first-spell view should be well over the truth"
+    assert abs(busy_surv - quiet_surv) < 0.05 * quiet_surv, "and barely move at all"

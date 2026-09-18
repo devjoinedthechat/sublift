@@ -175,6 +175,29 @@ critical value, so 2–6% fewer subscribers for the same power.
 arm always has the largest point estimate. The two-arm estimators refuse to run on a multi-arm
 panel, so this is hard to do by accident. [More](docs/multi-arm.md).
 
+### Subscribers who come back
+
+```python
+panel = sl.SubscriberPanel.from_spells(df, ...)   # one row per subscriber-SPELL
+sl.occupancy_lift(panel, horizon=12, strata=["plan"])
+```
+
+People cancel and resubscribe, or pause over the summer. Time-to-first-cancellation records a
+subscriber who paid for periods 1–3 and 6–12 as churning at period 3 — and the error runs the
+*wrong way*. The subscribers written off as lost are disproportionately in the **control** arm,
+so ignoring returns **overstates** your win:
+
+| win-back rate | true effect | time-to-first-cancellation |
+|---|---|---|
+| 0% | +0.2585 | +0.2609 |
+| 10% | +0.2149 | +0.2609 (21% high) |
+| 20% | +0.1814 | +0.2609 (**44% high**) |
+
+The right column does not move: the first-spell estimate structurally cannot see returns.
+`occupancy_lift` measures expected periods *paid for*, which does not care whether they came in
+one run or three, and tracks the truth at every rate. On single-spell data the two agree within
+a fraction of a standard error. [More](docs/win-backs.md).
+
 ### Slicing the base, honestly
 
 ```python
@@ -396,11 +419,13 @@ each other — two independent routes to the same standard error.
 | | |
 |---|---|
 | `SubscriberPanel.from_spans` | dates in, billing periods out — **start here** |
+| `.from_spells` | several paying spells per subscriber (win-backs, pauses) |
 | `.from_periods` / `.from_subjects` | already have period counts |
 | `check_randomization` | SRM + baseline balance |
 | `check_censoring` | is censoring really administrative? |
 | `incremental_ltv` | the money question |
 | `retained_periods_lift` | the retention question |
+| `occupancy_lift` | periods paid for, when subscribers return |
 | `churn_decomposition` | voluntary vs involuntary |
 | `multi_arm_lift` | many arms vs one control, family-wise error control |
 | `segment_scan` | effects by segment, without manufacturing findings |
@@ -437,7 +462,8 @@ Roadmap:
 - [ ] Multiplicity across *metrics*, and across arms × segments together *(largest known gap)*
 - [ ] All-pairs comparisons; today every contrast is against the control
 - [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
-- [ ] Pauses, plan switches and win-backs in the panel and the simulator
+- [x] Win-backs and pauses (`from_spells`, `occupancy_lift`)
+- [ ] Covariate-adjusted occupancy, and competing risks beyond the first spell
 
 ## Documentation
 
@@ -448,6 +474,7 @@ Roadmap:
 | [Monitoring a running test](docs/monitoring.md) | Why peeking breaks a p-value |
 | [Testing several arms](docs/multi-arm.md) | Many offers, one holdout, one error rate |
 | [Slicing the base](docs/segments.md) | Segment scans that don't manufacture findings |
+| [Subscriptions that come back](docs/win-backs.md) | Win-backs, pauses, and why first-cancellation overstates |
 | [Voluntary vs involuntary churn](docs/competing-risks.md) | Competing risks, and why the split is exact |
 | [Assumptions](docs/assumptions.md) | When sublift is wrong — read this one |
 | [Method](docs/method.md) | The estimand, the influence functions, the references |

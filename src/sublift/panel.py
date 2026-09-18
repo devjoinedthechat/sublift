@@ -40,6 +40,14 @@ class SubscriberPanel:
         distribution be computed exactly instead of estimated. Populated
         automatically by :meth:`from_spans`.
 
+    ``active``
+        Optional. A subscriber-by-period boolean grid of who was *paying* in each
+        period, which is what :meth:`from_spells` records. A single-spell
+        subscription is fully described by ``n_periods`` and ``event``; a
+        subscriber who cancels and comes back, or pauses and resumes, is not, and
+        reducing them to "churned at period five" throws away the periods they
+        paid for afterwards. See :func:`sublift.occupancy_lift`.
+
     ``cause``
         Optional. Why the subscription ended -- typically voluntary cancellation
         versus involuntary churn from a failed payment. These are different
@@ -63,6 +71,7 @@ class SubscriberPanel:
     cause: np.ndarray | None = field(default=None, repr=False)
     cause_labels: tuple[str, ...] = ()
     potential_followup: np.ndarray | None = field(default=None, repr=False)
+    active: np.ndarray | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------ build
 
@@ -344,6 +353,160 @@ class SubscriberPanel:
             potential_followup=potential,
         )
 
+    @classmethod
+    def from_spells(
+        cls,
+        df: pd.DataFrame,
+        *,
+        subject: str,
+        arm: str,
+        assigned_at: str,
+        spell_start: str,
+        spell_end: str,
+        observed_through: str | object,
+        billing_interval: str | int = "month",
+        control: object | None = None,
+        covariates: Sequence[str] | None = None,
+        price: str | float | None = None,
+    ) -> SubscriberPanel:
+        """Build from one row per subscriber-*spell*, for subscriptions that come back.
+
+        Consumer subscriptions are not one continuous span. People cancel and
+        resubscribe three months later, pause over the summer, or churn from
+        monthly and return on annual. :meth:`from_spans` reduces all of that to
+        the first cancellation, which is the right model when the first churn is
+        the outcome you care about and plainly wrong when a third of your base
+        wins back.
+
+        This constructor keeps every paying spell, and
+        :func:`sublift.occupancy_lift` measures the quantity that then makes
+        sense: expected billing periods *paid for* within the horizon, rather
+        than time until a first ending. ``n_periods`` and ``event`` are still
+        derived from the first spell, so the survival estimators keep working and
+        the two framings can be compared on the same data.
+
+        Parameters
+        ----------
+        assigned_at
+            When the subscriber entered the experiment. Must be identical on
+            every row for a subscriber -- it is a property of the subscriber, not
+            of the spell.
+        spell_start, spell_end
+            The paying period, with ``spell_end`` the date of the **last payment
+            in that spell**, matching :meth:`from_spans`. A null end means the
+            spell was still open at the data cut. Spells may be listed in any order and may overlap, which
+            happens when a plan change opens a new row before the old one closes;
+            overlaps collapse to "paying" rather than being counted twice.
+        """
+        cols = [subject, arm, assigned_at, spell_start, spell_end] + list(covariates or [])
+        cols += [observed_through] if isinstance(observed_through, str) and observed_through in df else []
+        cols += [price] if isinstance(price, str) else []
+        _require_columns(df, cols)
+
+        work = df.copy()
+        work["_assigned"] = _as_datetime(work[assigned_at], assigned_at)
+        work["_start"] = _as_datetime(work[spell_start], spell_start)
+        work["_end"] = _as_datetime(work[spell_end], spell_end, allow_missing=True)
+
+        grouped = work.groupby(subject, sort=True)
+        if (grouped["_assigned"].nunique() > 1).any():
+            raise PanelError(
+                f"{assigned_at!r} varies within a subscriber. Entry into the experiment is a "
+                "property of the subscriber; a spell that starts later is still the same entry."
+            )
+        first = grouped.head(1).sort_values(subject).reset_index(drop=True)
+
+        if isinstance(observed_through, str) and observed_through in work:
+            cut = _as_datetime(work[observed_through], observed_through)
+        else:
+            cut = pd.Series([pd.to_datetime(observed_through)] * len(work), index=work.index)
+        if (cut < work["_assigned"]).any():
+            raise PanelError(
+                f"Some subscribers were assigned after {observed_through!r}; check the data cut."
+            )
+
+        subjects = first[subject].to_numpy()
+        lookup = {value: i for i, value in enumerate(subjects)}
+        index = work[subject].map(lookup).to_numpy()
+
+        cut_first = cut.groupby(work[subject].to_numpy()).first()
+        potential = (
+            _periods_between(
+                first["_assigned"], cut_first.loc[subjects].reset_index(drop=True), billing_interval
+            )
+            + 1
+        ).to_numpy(dtype=np.int64)
+
+        open_spell = work["_end"].isna() | (work["_end"] > cut)
+        spell_end_date = work["_end"].where(~open_spell, cut)
+        start_period = _periods_between(work["_assigned"], work["_start"], billing_interval) + 1
+        end_period = _periods_between(work["_assigned"], spell_end_date, billing_interval) + 1
+        if (work["_start"] < work["_assigned"]).any():
+            raise PanelError(
+                f"Some spells start before {assigned_at!r}. Periods are counted from entry into "
+                "the experiment, so a spell that predates it cannot be placed."
+            )
+
+        width = int(max(potential.max(), int(end_period.max())))
+        active = _spell_grid(
+            index,
+            start_period.to_numpy(dtype=np.int64),
+            end_period.to_numpy(dtype=np.int64),
+            len(subjects),
+            width,
+        )
+        # Nothing is known past a subscriber's own follow-up; leave it out of the grid.
+        observable = np.arange(1, width + 1)[None, :] <= potential[:, None]
+        active = active & observable
+
+        # First-spell survival view, so the ordinary estimators still apply.
+        first_end = (
+            pd.DataFrame({"i": index, "start": start_period, "end": end_period, "open": open_spell})
+            .sort_values(["i", "start"])
+            .groupby("i")
+            .head(1)
+            .sort_values("i")
+        )
+        n_periods = first_end["end"].to_numpy(dtype=np.int64)
+        # A spell that closed on or before the cut is a churn, exactly as in from_spans;
+        # one still open at the cut is censored there.
+        ev = ~first_end["open"].to_numpy(dtype=bool)
+        n_periods = np.minimum(np.maximum(n_periods, 1), potential)
+
+        arm_idx, labels = _as_arm(first[arm], arm, control)
+
+        rev = None
+        if price is not None:
+            per_subject = (
+                pd.to_numeric(first[price], errors="coerce").to_numpy(dtype=float)
+                if isinstance(price, str)
+                else np.full(len(subjects), float(price))
+            )
+            if np.isnan(per_subject).any():
+                raise PanelError(f"{price!r} contains non-numeric or missing values.")
+            # Revenue accrues only in periods actually paid for; a pause earns nothing.
+            rev = np.where(active, per_subject[:, None], 0.0)
+            rev[~observable] = np.nan
+
+        cov = None
+        if covariates:
+            varying = [c for c in covariates if grouped[c].nunique(dropna=False).gt(1).any()]
+            if varying:
+                raise PanelError(f"Covariates {varying} vary within a subscriber.")
+            cov = first[list(covariates)].reset_index(drop=True)
+
+        return cls(
+            subject=subjects,
+            arm=arm_idx,
+            n_periods=n_periods,
+            event=ev,
+            arm_labels=labels,
+            covariates=cov,
+            revenue=rev,
+            potential_followup=potential,
+            active=active,
+        )
+
     # --------------------------------------------------------------- inspect
 
     def __post_init__(self) -> None:
@@ -355,6 +518,8 @@ class SubscriberPanel:
             raise PanelError("Panel is empty.")
         if self.revenue is not None and self.revenue.shape[0] != n:
             raise PanelError("revenue matrix must have one row per subject.")
+        if self.active is not None and self.active.shape[0] != n:
+            raise PanelError("active grid must have one row per subject.")
         if self.potential_followup is not None:
             if len(self.potential_followup) != n:
                 raise PanelError("potential_followup must have one entry per subject.")
@@ -386,6 +551,11 @@ class SubscriberPanel:
     @property
     def n_arms(self) -> int:
         return len(self.arm_labels)
+
+    @property
+    def has_spells(self) -> bool:
+        """Whether this panel records more than one paying spell per subscriber."""
+        return self.active is not None
 
     @property
     def treatment_labels(self) -> tuple[str, ...]:
@@ -423,6 +593,7 @@ class SubscriberPanel:
             potential_followup=(
                 self.potential_followup[idx] if self.potential_followup is not None else None
             ),
+            active=self.active[idx] if self.active is not None else None,
         )
 
     @property
@@ -487,6 +658,7 @@ class SubscriberPanel:
             potential_followup=(
                 self.potential_followup[idx] if self.potential_followup is not None else None
             ),
+            active=self.active[idx] if self.active is not None else None,
         )
 
     def describe(self) -> pd.DataFrame:
@@ -653,3 +825,26 @@ def _as_cause(s: pd.Series | None, name: str | None, event: np.ndarray):
     for i in np.flatnonzero(event):
         codes[i] = lookup[as_str[i]]
     return codes, labels
+
+
+def _spell_grid(
+    subject_index: np.ndarray,
+    start: np.ndarray,
+    end: np.ndarray,
+    n_subjects: int,
+    width: int,
+) -> np.ndarray:
+    """Boolean subscriber-by-period grid from possibly several spells per subscriber.
+
+    Built with a difference array rather than a loop over spells: each spell adds
+    +1 at its first period and -1 just past its last, and one cumulative sum
+    turns the whole thing into occupancy. Overlapping spells -- which happen when
+    a plan change is recorded as a new row before the old one closes -- collapse
+    to "paying", which is the right answer and what a per-spell loop would get
+    wrong by double counting.
+    """
+    diff = np.zeros((n_subjects, width + 1), dtype=np.int32)
+    valid = (start <= width) & (end >= start)
+    np.add.at(diff, (subject_index[valid], np.clip(start[valid], 1, width) - 1), 1)
+    np.add.at(diff, (subject_index[valid], np.clip(end[valid], 1, width)), -1)
+    return np.cumsum(diff[:, :width], axis=1) > 0

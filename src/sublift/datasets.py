@@ -48,6 +48,7 @@ class SimulatedExperiment:
     true_individual_rmst_lift: np.ndarray | None = None
     true_periods_saved: dict[str, float] | None = None
     true_arm_lift: dict[str, float] | None = None
+    true_occupancy_lift: float | None = None
     horizon: int = 12
     params: dict = field(default_factory=dict, repr=False)
 
@@ -72,6 +73,7 @@ def simulate_experiment(
     effect_decay: float = 0.0,
     effect_modification: float = 0.0,
     involuntary_hazard: float = 0.0,
+    winback_hazard: float = 0.0,
     treat_fraction: float = 0.5,
     with_covariates: bool = True,
     covariate_strength: float = 0.6,
@@ -132,6 +134,13 @@ def simulate_experiment(
         assumes independent censoring is biased, and inverse-probability-of-
         censoring weighting is needed. Use it to check whether an analysis is
         robust to the assumption it is quietly making.
+    winback_hazard
+        Per-period probability that a churned subscriber resubscribes. Above
+        zero, the result carries an activity grid instead of a single spell, and
+        ``true_occupancy_lift`` gives the true incremental periods *paid for* --
+        the estimand :func:`sublift.occupancy_lift` targets. Values around
+        ``0.03``-``0.08`` against a 6-7% churn hazard reproduce the win-back
+        rates consumer subscription businesses actually see.
     involuntary_hazard
         Per-period probability of *involuntary* churn -- a failed payment that
         dunning does not recover. Set above zero and the simulated experiment
@@ -184,6 +193,27 @@ def simulate_experiment(
         informative = False
     n_periods = np.minimum(lifetime, censor)
     event = lifetime <= censor
+
+    if winback_hazard > 0:
+        # Counterfactual hazards for every subscriber under each arm, so the truth is the
+        # super-population effect rather than whatever covariates each arm happened to draw.
+        counterfactual = {
+            a: _expit(alpha[None, :] + (X @ gamma)[:, None] + a * modifier[:, None] * beta[None, :])
+            for a in (0, 1)
+        }
+        return _with_winbacks(
+            rng,
+            arm,
+            hazard,
+            counterfactual,
+            censor,
+            winback_hazard,
+            horizon,
+            observation_window,
+            cov_frame,
+            price,
+            n,
+        )
 
     weights = _price_schedule(price, treatment_discount, discount_periods, observation_window)
     observed_cause = np.where(event, cause, -1)
@@ -558,4 +588,85 @@ def simulate_multi_arm(
         true_survival={},
         true_arm_lift=truths,
         params={"n": n, "effects": effects},
+    )
+
+
+def _with_winbacks(
+    rng, arm, hazard, counterfactual, censor, winback, horizon, window, cov_frame, price, n
+) -> SimulatedExperiment:
+    """A two-state world: subscribers churn, and some of them come back.
+
+    Active subscribers leave at the churn hazard; lapsed ones return at
+    ``winback``. The chain makes the true occupancy computable in closed form --
+    ``p(t+1) = p(t)(1-h(t)) + (1-p(t))w`` -- so the estimator can be checked
+    against an answer rather than against another estimator.
+    """
+    active = np.zeros((n, window), dtype=bool)
+    alive = np.ones(n, dtype=bool)
+    churn_draw = rng.random((n, window))
+    back_draw = rng.random((n, window))
+
+    # The period of a subscriber's *first* cancellation, recorded as it happens rather
+    # than read back off the grid afterwards. Reading it off the grid cannot tell a
+    # subscriber who cancelled in the final period from one who simply had not
+    # cancelled yet, and quietly loses every churn on the last observable period.
+    first_left = np.zeros(n, dtype=np.int64)
+
+    active[:, 0] = True
+    for t in range(1, window + 1):
+        leaving = alive & (churn_draw[:, t - 1] < hazard[:, t - 1])
+        newly = leaving & (first_left == 0)
+        first_left[newly] = t  # period t was their last paid one
+        returning = (~alive) & (back_draw[:, t - 1] < winback)
+        alive = (alive & ~leaving) | returning
+        if t < window:
+            active[:, t] = alive
+
+    observable = np.arange(1, window + 1)[None, :] <= censor[:, None]
+    active &= observable
+
+    # First-spell view, on exactly the convention the single-spell generator uses.
+    lifetime = np.where(first_left > 0, first_left, window + 1)
+    n_periods = np.minimum(lifetime, censor)
+    event = lifetime <= censor
+
+    revenue = np.where(active, float(price), 0.0)
+    revenue[~observable] = np.nan
+
+    panel = SubscriberPanel(
+        subject=np.arange(n),
+        arm=arm.astype(np.int16),
+        n_periods=n_periods,
+        event=event,
+        arm_labels=("control", "treatment"),
+        covariates=cov_frame,
+        revenue=revenue,
+        potential_followup=censor,
+        active=active,
+    )
+
+    truth = {}
+    for label, on in (("control", 0), ("treatment", 1)):
+        occupied = np.zeros(horizon)
+        state = np.ones(n)
+        for t in range(horizon):
+            occupied[t] = state.mean()
+            state = state * (1.0 - counterfactual[on][:, t]) + (1.0 - state) * winback
+        truth[label] = float(occupied.sum())
+
+    frame = pd.DataFrame(
+        {
+            "subscriber_id": np.repeat(np.arange(n), active.sum(axis=1)),
+            "billing_period": np.concatenate([np.flatnonzero(row) + 1 for row in active]),
+        }
+    )
+    return SimulatedExperiment(
+        panel=panel,
+        frame=frame,
+        horizon=horizon,
+        true_rmst_lift=float("nan"),
+        true_ltv_lift=float("nan"),
+        true_survival={},
+        true_occupancy_lift=truth["treatment"] - truth["control"],
+        params={"n": n, "winback_hazard": winback},
     )

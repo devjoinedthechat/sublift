@@ -245,8 +245,34 @@ for label, kw in (
         f"-> {'scale artefact' if scan.scale_artefact else 'real mechanism'}"
     )
 
+# ------------------------------------------------------------------ win-backs
+rule("8. Subscribers who come back: which estimand survives them?")
+print("   Everything fixed except how often a churned subscriber resubscribes.")
+print(f"   {'win-back':>9s} {'true':>9s} {'occupancy':>10s} {'first-spell':>12s} {'overstated':>11s}")
+for winback in (1e-9, 0.05, 0.10, 0.20):
+    occupancy, survival, truth = [], [], None
+    for r in range(60):
+        sim = sl.simulate_experiment(
+            n=20_000,
+            horizon=HORIZON,
+            observation_window=13,
+            seed=6000 + r,
+            treatment_odds_ratio=0.85,
+            winback_hazard=winback,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            occupancy.append(sl.occupancy_lift(sim.panel, horizon=HORIZON).estimate)
+            survival.append(
+                sl.retained_periods_lift(sim.panel, horizon=HORIZON, estimator="unadjusted").estimate
+            )
+        truth = sim.true_occupancy_lift
+    o, s_ = np.mean(occupancy), np.mean(survival)
+    print(f"   {winback:>9.2f} {truth:>+9.4f} {o:>+10.4f} {s_:>+12.4f} {100 * (s_ - truth) / truth:>10.0f}%")
+print("   (the first-spell column does not move: it cannot see returns at all)")
+
 # -------------------------------------------------------------------- uplift
-rule("8. Uplift: why the default learner is not a T-learner")
+rule("9. Uplift: why the default learner is not a T-learner")
 print(f"   {'regime':<32s} {'T-learner':>10s} {'pooled+shrunk':>14s}")
 covs = ["engagement", "plan", "tenure_bucket"]
 for em, label in ((0.0, "constant odds ratio"), (1.5, "strong effect modification")):
