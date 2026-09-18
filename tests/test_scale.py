@@ -110,6 +110,32 @@ def test_the_segment_scan_holds_one_influence_matrix_not_three():
 
 
 @pytest.mark.slow
+def test_scanning_more_segments_does_not_cost_more_memory():
+    """The property the sparse influence storage buys.
+
+    A segment's influence function is zero off its own subscribers, so storing it
+    densely costs the whole base per segment. Stored compactly, the total is the
+    base times the number of *dimensions* scanned, however finely each is cut.
+
+    Cross-producting three dimensions gives 18 segments where scanning them
+    separately gives 8 -- 2.25 times the comparisons, which dense storage would
+    charge for in full. Here it should cost almost nothing extra, and at ten
+    million subscribers the cross-product is outright cheaper, because it is one
+    dimension rather than three. At a million the per-segment model fits still
+    show, so the assertion is sub-proportional growth rather than none.
+    """
+    sim = simulate_experiment(n=1_000_000, seed=1, horizon=12, observation_window=18, price=12.0)
+    by = ["plan", "tenure_bucket", "engagement_bucket"]
+    separate, _ = peak_megabytes(lambda: segment_scan(sim.panel, by=by, horizon=12))
+    crossed, _ = peak_megabytes(lambda: segment_scan(sim.panel, by=by, horizon=12, cross=True))
+    assert crossed <= separate * 1.4, (
+        f"18 cross-product segments took {crossed:.0f}MB against {separate:.0f}MB for 8 "
+        f"separate ones ({crossed / separate:.2f}x for 2.25x the comparisons); memory is "
+        "tracking segments rather than dimensions"
+    )
+
+
+@pytest.mark.slow
 def test_the_segment_odds_ratio_is_aggregated_not_expanded():
     """Its design is entirely categorical, so it has 2 x horizon distinct rows.
 

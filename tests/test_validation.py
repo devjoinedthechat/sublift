@@ -23,6 +23,7 @@ from sublift import (
     simulate_experiment,
     simulate_multi_arm,
 )
+from sublift.sequential import confidence_sequence
 
 pytestmark = pytest.mark.slow
 
@@ -643,3 +644,65 @@ def test_covariate_adjusted_occupancy_is_unbiased_and_covers():
     e = np.array(ests)
     assert abs(e.mean() - truth) < 3.5 * e.std(ddof=1) / np.sqrt(reps)
     assert 0.92 <= covered / reps <= 0.99, f"coverage {covered / reps:.1%}"
+
+
+def test_monitoring_a_family_of_arms_holds_its_error_rate():
+    """Peeking and multiplicity at once: four null arms, watched at every interim look.
+
+    Also measures what the family correction buys here, which is very little. A
+    confidence sequence is already conservative relative to its nominal level, and
+    ``alpha`` enters its boundary inside a logarithm, so dividing it across the
+    family barely moves the interval. The comparison is recorded because the
+    natural assumption -- that multiplicity matters as much here as it does at a
+    single look -- is wrong.
+    """
+    reps, n_max = 150, 12_000
+    looks = np.arange(1500, n_max + 1, 1500)
+    ever_flagged = {"none": 0, "bonferroni": 0, "max-t": 0}
+    order = np.random.default_rng(0)
+
+    for r in range(reps):
+        sim = simulate_multi_arm(n=n_max, effects={"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}, seed=70_000 + r)
+        # The simulator lays arms out in blocks; shuffle into an arrival order so a
+        # prefix is a sample rather than one arm.
+        panel = sim.panel.take(order.permutation(sim.panel.n_subjects))
+        hit = dict.fromkeys(ever_flagged, False)
+
+        for look in looks:
+            mask = np.zeros(panel.n_subjects, dtype=bool)
+            mask[:look] = True
+            result = multi_arm_lift(
+                panel.subset(mask), horizon=6, estimator="unadjusted", allow_extrapolation=True
+            )
+            for contrast, influence in zip(result.contrasts, result.influence, strict=True):
+                uncorrected = confidence_sequence(
+                    influence, estimate=contrast.estimate, alpha=0.05, n_target=n_max
+                )
+                hit["none"] |= uncorrected.excludes_zero
+            for mode in ("bonferroni", "max-t"):
+                sequences = result.confidence_sequences(n_target=n_max, calibration=mode)
+                hit[mode] |= any(cs.excludes_zero for cs in sequences.values())
+
+        for key in ever_flagged:
+            ever_flagged[key] += hit[key]
+
+    rate = {k: v / reps for k, v in ever_flagged.items()}
+    for mode in ("bonferroni", "max-t"):
+        assert rate[mode] <= 0.05, f"{mode} did not hold the family-wise rate: {rate[mode]:.1%}"
+    # And the honest part: correcting barely changes it, because the sequence was
+    # already well inside its nominal level.
+    assert rate["none"] <= 0.08
+
+
+def test_effective_multiplicity_spans_independent_to_identical():
+    """The quantity the max-t calibration rests on, at both ends."""
+    from sublift.family import effective_multiplicity
+
+    for rho, expected in ((0.0, 4.0), (1.0, 1.0)):
+        corr = np.full((4, 4), rho)
+        np.fill_diagonal(corr, 1.0)
+        assert effective_multiplicity(corr) == pytest.approx(expected, abs=0.1)
+    # Correlated but not identical lands strictly between.
+    middling = np.full((4, 4), 0.5)
+    np.fill_diagonal(middling, 1.0)
+    assert 1.0 < effective_multiplicity(middling) < 4.0

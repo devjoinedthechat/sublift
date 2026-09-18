@@ -392,11 +392,16 @@ question. One million subscribers, twelve billing periods, on a laptop:
 | **`review`** (checks + both metrics + causes) | **1.89s** | **160 MB** |
 
 Ten times that — **ten million subscribers** — and everything is still under twenty seconds:
-`retained_periods_lift` 3.3s/0.5 GB, `segment_scan` 6.4s/1.1 GB, `review` 11.4s/0.7 GB. The
+`retained_periods_lift` 3.3s/0.5 GB, `segment_scan` 6.7s/0.8 GB, `review` 11.4s/0.7 GB. The
 algorithms are linear in subscribers, so a hundred million extrapolates to roughly half a minute
-and 5 GB for the core estimators — a server, not a laptop, and `segment_scan` is the binding
-constraint at around 11 GB because the covariance between segments needs their influence values
-side by side. Making that sparse is the next real optimization and has not been done.
+and 5–8 GB — a server, not a laptop.
+
+`segment_scan` used to be the binding constraint, because forming the covariance between
+segments appeared to need their influence values side by side. It does not: a segment's influence
+function is zero off its own subscribers, so storing it compactly and computing the
+cross-products through one scratch vector costs the base times the number of **dimensions**
+scanned rather than the number of segments. Cross-producting three dimensions into 18 segments
+now costs *less* than scanning them as 8, which is the shape you want when someone slices finely.
 
 Getting there took four things worth naming, because each is the kind of cost that is invisible
 until someone runs it at scale:
@@ -578,10 +583,13 @@ Roadmap:
 - [x] Win-backs and pauses (`from_spells`, `occupancy_lift`)
 - [x] Covariate-adjusted occupancy, and competing risks beyond the first spell
 - [x] Informative censoring: bounded by `censoring_sensitivity` rather than pretended away
-- [ ] A sparse influence matrix for `segment_scan`, the binding memory constraint above ~50M
-      subscribers
-- [ ] Sequential monitoring of a whole family at once with max-t rather than Bonferroni
-      calibration
+- [x] A sparse influence matrix for `segment_scan`; memory now tracks the number of dimensions
+      scanned rather than the number of segments
+- [x] Sequential monitoring of a whole family — measured, and found to buy about 1%, so
+      Bonferroni stays the default
+
+Nothing large is outstanding. The honest open questions are narrower: competing risks under
+covariate adjustment, a hazard model that is not logistic, and multiplicity across horizons.
 
 ## Documentation
 

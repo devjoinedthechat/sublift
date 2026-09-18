@@ -11,6 +11,24 @@ slipped into a patch release.
 ## [Unreleased]
 
 ### Added
+- `MultiArmResult.confidence_sequences(calibration=...)`, and `effective_multiplicity` behind it:
+  how many *independent* comparisons a correlated family behaves like. Bonferroni remains the
+  default, deliberately. Measured under a global null at eight interim looks, no correction at
+  all gives 2.5% against a nominal 5%, Bonferroni and the calibrated split both 1.0%, and the
+  latter's intervals about 1% narrower — because `alpha` enters the sequence boundary inside a
+  logarithm, and because a confidence sequence is already conservative relative to its nominal
+  level. Defaulting to an approximation for a one percent interval is not a trade worth making.
+
+### Performance
+- **`segment_scan` stores influence functions compactly.** A segment's influence is zero off its
+  own subscribers, so a dense row per segment costs the whole base each time. Held as values on
+  the segment's own subscribers, with cross-products computed through a single scratch vector,
+  the total tracks the number of *dimensions* scanned rather than the number of segments:
+  cross-producting three dimensions into 18 segments now costs less than scanning them as 8.
+  1.13 GB to 0.82 GB at ten million subscribers, and the gap widens the more finely you slice.
+  Identical to the dense product to 9e-13.
+
+### Added
 - **`censoring_sensitivity`**: how badly independent censoring would have to fail before the
   conclusion changes. `check_censoring` tests dependence on covariates you recorded; nothing can
   test the case where subscribers leave for reasons related to how much longer they would have

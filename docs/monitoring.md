@@ -73,6 +73,38 @@ p-value and it is only valid if the analysis you are reading is the *only* one y
 `result.summary()` prints both and says which is which, so the honest number is the one that is
 hard to avoid reading.
 
+## Monitoring a family
+
+Peeking and multiplicity are different problems, and a test doing both needs both. A confidence
+sequence makes *when* you stop a free variable; it does nothing about *how many things* you
+looked at.
+
+```python
+result.confidence_sequences(n_target=80_000)      # multi-arm, split across arms
+```
+
+The default splits `alpha` by Bonferroni. That is a deliberate retreat from the fixed-sample
+case, where max-t is clearly better. Measured under a global null with four arms, watched at
+eight interim looks:
+
+| | ever declared a winner | interval width |
+|---|---|---|
+| no family correction at all | 2.5% | — |
+| Bonferroni | 1.0% | baseline |
+| effective-multiplicity ("max-t") | 1.0% | ~1% narrower |
+
+Nominal rate: 5%.
+
+Two things worth reading off that table. The correction buys **almost nothing** — `alpha` enters
+the sequence boundary inside a logarithm, so dividing it by 3.5 rather than 4 barely moves the
+interval. And all three rates sit well under 5%, because a confidence sequence is already
+conservative relative to its nominal level; the boundary is tightest at `n_target` and loose
+everywhere else.
+
+`calibration="max-t"` is available and validated. It is not the default because defaulting to an
+approximation for a one percent interval is not a trade worth making, and Bonferroni's union
+bound is provable.
+
 ## What this does not fix
 
 Anytime-valid inference protects you against **looking repeatedly at one metric**. It does not

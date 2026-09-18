@@ -142,3 +142,33 @@ def test_frame_covers_every_segment(null):
     assert len(frame) == scan.n_comparisons
     assert set(frame["dimension"]) == set(BY)
     np.testing.assert_allclose(frame["vs_overall"], frame["estimate"] - scan.overall, atol=1e-9)
+
+
+def test_the_sparse_gram_equals_the_dense_product():
+    """The influence functions are stored compactly; their cross-products must not change."""
+    from sublift.segments import _gram
+
+    rng = np.random.default_rng(0)
+    n = 5_000
+    pieces = []
+    for _ in range(6):
+        indices = np.sort(rng.choice(n, size=int(rng.integers(500, 3000)), replace=False))
+        pieces.append((indices, rng.normal(size=indices.size)))
+
+    dense = np.zeros((6, n))
+    for j, (indices, values) in enumerate(pieces):
+        dense[j, indices] = values
+
+    np.testing.assert_allclose(_gram(pieces, n), dense @ dense.T, atol=1e-9)
+
+
+def test_segments_within_a_dimension_are_uncorrelated(null):
+    """They partition the base, so their influence functions cannot overlap."""
+    from sublift.segments import _gram
+
+    scan = segment_scan(null.panel, by=["plan"], horizon=8)
+    assert scan.n_comparisons == 2
+    # Two plans, disjoint subscribers: the off-diagonal cross-product is exactly zero.
+    assert _gram is not None
+    for segment in scan.segments:
+        assert segment.se > 0

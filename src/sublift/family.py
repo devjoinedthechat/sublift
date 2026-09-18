@@ -287,3 +287,32 @@ def multivariate_normal(rng, corr: np.ndarray, draws: int) -> np.ndarray:
         values, vectors = np.linalg.eigh(corr)
         factor = vectors @ np.diag(np.sqrt(np.clip(values, 0.0, None)))
     return rng.standard_normal((draws, k)) @ factor.T
+
+
+def effective_multiplicity(corr: np.ndarray, *, alpha: float = 0.05, seed: int = 0) -> float:
+    """How many *independent* comparisons this family behaves like.
+
+    Bonferroni charges a family of ``k`` comparisons as if all ``k`` were separate
+    chances to be wrong. When they are correlated, fewer of them are. This reads
+    the max-t critical value off the estimated correlation and asks what
+    Bonferroni divisor would have produced the same threshold::
+
+        k_eff = alpha / (2 * P(Z > c))
+
+    Independent comparisons give back ``k``; perfectly correlated ones give back
+    1, which is right -- looking twice at the same number is one look.
+
+    It exists because a confidence sequence has no max-t form: its boundary is
+    derived for a scalar process, and the correlation between comparisons does not
+    enter it. Splitting ``alpha`` by the effective multiplicity instead of by
+    ``k`` is an approximation, and it is validated by simulation rather than
+    argued for -- see ``tests/test_validation.py``.
+    """
+    k = corr.shape[0]
+    if k < 2:
+        return 1.0
+    critical, _ = calibrate("max-t", corr, np.zeros(k), np.ones(k), alpha, k, seed)
+    tail = float(stats.norm.sf(critical))
+    if tail <= 0:
+        return float(k)
+    return float(np.clip(alpha / (2 * tail), 1.0, k))

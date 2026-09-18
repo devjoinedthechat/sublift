@@ -328,23 +328,21 @@ def segment_scan(
     notes: list[str] = []
     n = panel.n_subjects
 
-    overall_value, overall_psi, _ = _contrast(
+    # The overall contrast covers everybody, so its "compact" form is already dense
+    # and in subscriber order.
+    overall_value, (_, overall_psi), _ = _contrast(
         panel, np.ones(n, dtype=bool), horizon, weights, allow_extrapolation
     )
 
     definitions = _definitions(panel, list(by), cross)
-    # Preallocated and filled in place: collecting rows in a list and vstacking them
-    # holds the whole influence matrix twice, which at ten million subscribers is a
-    # gigabyte spent on a copy.
-    psi = np.empty((len(definitions), n))
-    rows = []
+    rows, pieces = [], []
     for dimension, label, mask in definitions:
         sizes = [int((mask & (panel.arm == a)).sum()) for a in (0, 1)]
         if min(sizes) < min_per_arm:
             notes.append(f"{dimension}={label} dropped: {sizes[0]} control / {sizes[1]} treatment")
             continue
-        value, influence, control_value = _contrast(panel, mask, horizon, weights, allow_extrapolation)
-        psi[len(rows)] = influence
+        value, piece, control_value = _contrast(panel, mask, horizon, weights, allow_extrapolation)
+        pieces.append(piece)
         rows.append((dimension, label, mask, sizes, value, control_value))
 
     if not rows:
@@ -353,10 +351,9 @@ def segment_scan(
             "segments, or lower min_per_arm and read the result as exploratory."
         )
 
-    psi = psi[: len(rows)]
     estimates = np.array([r[4] for r in rows])
     control_values = np.array([r[5] for r in rows])
-    cov = (psi @ psi.T) / (n**2)
+    cov = _gram(pieces, n) / (n**2)
     se = np.sqrt(np.diag(cov))
     z_scores = np.divide(estimates, se, out=np.zeros_like(estimates), where=se > 0)
     raw_p = 2 * stats.norm.sf(np.abs(z_scores))
@@ -370,7 +367,7 @@ def segment_scan(
     # compared against, so the two are far from independent.
     # Var(psi_j - overall) expands into terms already computed, so the differenced
     # influence matrix never has to exist.
-    cross = psi @ overall_psi
+    cross = np.array([values_j @ overall_psi[indices_j] for indices_j, values_j in pieces])
     overall_var = float(overall_psi @ overall_psi)
     interaction_se = np.sqrt(np.maximum(np.diag(cov) - 2 * cross / (n**2) + overall_var / (n**2), 0.0))
     interactions = estimates - overall_value
@@ -451,22 +448,53 @@ def _definitions(panel, by, cross):
 def _contrast(panel, mask, horizon, weights, allow_extrapolation):
     """Effect inside ``mask``, its influence function, and the control arm's value.
 
+    The influence function is returned **compactly**: its values on the segment's
+    own subscribers, aligned to ``np.flatnonzero(mask)``, because it is zero
+    everywhere else by construction. A dense row per segment costs the whole base
+    each time, and a scan over five dimensions of four levels each is twenty
+    segments -- twenty copies of the subscriber base to store something supported
+    on one twentieth of it.
+
     The control arm's own influence function is deliberately not returned. It was,
     when the second heterogeneity scale was the proportional effect and needed a
-    delta-method interval; that scale is now the churn odds ratio, which is fitted
-    separately, and keeping one full-length array per segment for nothing is a
-    gigabyte at ten million subscribers.
+    delta-method interval; that scale is now the churn odds ratio, fitted
+    separately.
     """
     n = panel.n_subjects
-    share = mask.sum() / n
-    values, psi = {}, np.zeros(n)
+    indices = np.flatnonzero(mask)
+    share = indices.size / n
+    values = {}
+    compact = np.zeros(indices.size)
+    inner_arm = panel.arm[indices]
     for a in (0, 1):
         arm_mask = mask & (panel.arm == a)
         _, value, inf, _ = _fit_arm(panel, arm_mask, horizon, weights[a], allow_extrapolation)
         values[a] = value
-        conditional = arm_mask.sum() / mask.sum()
-        psi[arm_mask] = (1 if a == 1 else -1) * inf / (share * conditional)
-    return values[1] - values[0], psi, values[0]
+        conditional = arm_mask.sum() / indices.size
+        compact[inner_arm == a] = (1 if a == 1 else -1) * inf / (share * conditional)
+    return values[1] - values[0], (indices, compact), values[0]
+
+
+def _gram(pieces, n):
+    """Cross-products between compactly-stored influence functions.
+
+    Segments within a dimension are disjoint, so most of these pairs are zero and
+    a dense product would spend its time multiplying by it. Scattering one segment
+    into a scratch vector and gathering the others out of it computes every pair
+    with a single full-length array alive at a time.
+    """
+    k = len(pieces)
+    gram = np.zeros((k, k))
+    scratch = np.zeros(n)
+    for j, (indices_j, values_j) in enumerate(pieces):
+        scratch[indices_j] = values_j
+        gram[j, j] = float(values_j @ values_j)
+        for level in range(j + 1, k):
+            indices_l, values_l = pieces[level]
+            overlap = float(scratch[indices_l] @ values_l)
+            gram[j, level] = gram[level, j] = overlap
+        scratch[indices_j] = 0.0
+    return gram
 
 
 def _heterogeneity(segments: list[SegmentEffect]) -> list[Heterogeneity]:
