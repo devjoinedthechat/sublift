@@ -10,6 +10,7 @@
   <a href="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml"><img src="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.10–3.13">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0">
+  <img src="https://img.shields.io/badge/tests-269-brightgreen" alt="269 tests">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <img src="https://img.shields.io/badge/dependencies-numpy%20%C2%B7%20scipy%20%C2%B7%20pandas-lightgrey" alt="Dependencies">
 </p>
@@ -30,8 +31,9 @@
 You ran a save offer against a holdout. Retention went up. Was it worth it?
 
 ```python
-result = sublift.incremental_ltv(panel, horizon=12, strata=["plan", "tenure_bucket"])
-print(result)
+import sublift as sl
+
+print(sl.incremental_ltv(panel, horizon=12, strata=["plan", "tenure_bucket"]))
 ```
 
 ```
@@ -54,6 +56,28 @@ Incremental LTV over 12 billing periods
 The offer bought **+0.32 billing periods** per subscriber and **destroyed $12.18 of lifetime
 value**, because the discount that bought the retention cost more than the retention was worth.
 A 30-day retention test calls that a win.
+
+## Why this is hard
+
+Four problems at once, and the usual answer — a two-proportion z-test on 30-day retention —
+solves none of them.
+
+**The outcome is censored.** Most subscribers in your test are still active. Their lifetime
+value hasn't happened yet. Averaging realized revenue is biased downward, and biased
+*differently in each arm* whenever the treatment moved the churn curve — which is the entire
+thing you're trying to measure.
+
+**Churn is discrete.** Subscriptions don't decay continuously; they end at renewal. The hazard
+is a spike train on billing boundaries, with a cliff at the annual renewal. Continuous-time
+machinery smooths over exactly the structure that matters.
+
+**The effect is slow and the base is noisy.** A 1.5-point retention lift on a 6% monthly churn
+base needs either enormous samples or real variance reduction. So teams substitute a 30-day
+proxy — a different question with a more convenient answer.
+
+**Everybody peeks.** A fixed-sample 95% interval is only a 95% interval if you look once.
+Checked daily, its false-positive rate climbs past 5%, because a random walk eventually crosses
+any fixed boundary. [Measured below](#does-it-actually-work): **26.4%** across sixteen looks.
 
 ## Install
 
@@ -125,28 +149,6 @@ sl.churn_decomposition(panel, horizon=12)                        # which churn m
 sl.segment_scan(panel, by=["plan"], horizon=12)                  # who it worked for
 sl.qini(panel, horizon=12, covariates=["engagement", "plan"])    # who to target
 ```
-
-## Why this is hard
-
-Four problems at once, and the usual answer — a two-proportion z-test on 30-day retention —
-solves none of them.
-
-**The outcome is censored.** Most subscribers in your test are still active. Their lifetime
-value hasn't happened yet. Averaging realized revenue is biased downward, and biased
-*differently in each arm* whenever the treatment moved the churn curve — which is the entire
-thing you're trying to measure.
-
-**Churn is discrete.** Subscriptions don't decay continuously; they end at renewal. The hazard
-is a spike train on billing boundaries, with a cliff at the annual renewal. Continuous-time
-machinery smooths over exactly the structure that matters.
-
-**The effect is slow and the base is noisy.** A 1.5-point retention lift on a 6% monthly churn
-base needs either enormous samples or real variance reduction. So teams substitute a 30-day
-proxy — a different question with a more convenient answer.
-
-**Everybody peeks.** A fixed-sample 95% interval is only a 95% interval if you look once.
-Checked daily, its false-positive rate climbs past 5%, because a random walk eventually crosses
-any fixed boundary. [Measured below](#does-it-actually-work): **26.4%** across sixteen looks.
 
 ## What you get
 
@@ -238,37 +240,7 @@ question, by simulating your actual enrollment schedule. `qini` gives cross-fitt
 effects, with a pooled shrunk-interaction learner that beats a T-learner whether or not effect
 modification is real (0.26 → 0.62 when it isn't, 0.94 → 0.97 when it is).
 
-## Does it run on a real subscriber base?
-
-A retention team at a media company has millions of subscribers, so this is not a rhetorical
-question. One million subscribers, twelve billing periods, on a laptop:
-
-| call | time | peak memory |
-|---|---|---|
-| `retained_periods_lift` (unadjusted) | 0.30s | 76 MB |
-| `retained_periods_lift` (stratified) | 1.54s | 138 MB |
-| `incremental_ltv` | 0.41s | 168 MB |
-| `churn_decomposition` | 0.18s | 97 MB |
-| `segment_scan` (8 segments) | 0.22s | 53 MB |
-| `retained_periods_lift` (adjusted) | 1.89s | 803 MB |
-| **`review`** (checks + both metrics + causes) | **1.89s** | **160 MB** |
-
-Ten times that — **ten million subscribers** — and everything is still under twenty seconds:
-`retained_periods_lift` 3.3s/0.5 GB, `segment_scan` 6.7s/0.8 GB, `review` 11.4s/0.7 GB. The
-algorithms are linear in subscribers, so a hundred million extrapolates to roughly half a minute
-and 5–8 GB — a server, not a laptop.
-
-Two properties are worth knowing because they are not the obvious ones. **Memory does not grow
-with the horizon**: the influence function forms no subscriber-by-period array at all, because
-both of its terms collapse to lookups into arrays of length `horizon`. And **`segment_scan`
-memory does not grow with the number of segments**, only with the number of dimensions scanned —
-cross-producting three dimensions into 18 segments costs less than scanning them as 8.
-
-`tests/test_scale.py` asserts these budgets, because reintroducing an `(n, horizon)` temporary in
-a hot path is easy and no correctness test would catch it. The optimisation history, including
-what turned out to be dead code, is in [CHANGELOG.md](CHANGELOG.md).
-
-## Families the library can't see
+### Families the library can't see
 
 `multi_arm_lift` corrects across arms and `segment_scan` across segments, but only you know
 what you actually looked at. `correct_family` takes any set of results that expose an influence
@@ -349,6 +321,23 @@ At 65% censoring the naive estimator is wrong by 47% of the effect it's trying t
 
 Nominal rate: 5%. Sixteen looks turn a 5% test into a 26% one.
 
+**Every influence function is checked against something that shares no derivation with it.**
+The influence functions are the riskiest surface here: each is a hand derivation, every interval
+is built from them, and an error would produce confident, plausible, wrong intervals rather than a
+crash. Checking them against the bootstrap is weak evidence, because both are the same author's
+work. So each is also checked against leave-one-out, which needs nothing but the ability to re-run
+the estimator on `n-1` subscribers:
+
+```
+IF_i  ≈  (n-1) · (θ_full − θ_without_i)
+```
+
+All thirteen agree. The ones whose influence function is exact — product-limit, the revenue term,
+the stratum-share term, competing risks, occupancy, segments, arms, the delta-method ratio — sit at
+correlation 1.0000 with slopes within 0.5% of one. The two first-order ones, the one-step EIF and
+the AIPW occupancy estimator, sit at 0.998 and 0.999, which is what a first-order approximation
+should do.
+
 **The validation is not circular.** Everything above generates from `sublift.datasets`, which
 encodes one author's assumptions about how subscriptions behave — and if those were the same
 assumptions baked into the estimators, none of it would prove anything. So one test generates
@@ -372,6 +361,36 @@ sampling spread.
 **The new influence functions agree with the bootstrap.** The `adjusted` estimator's efficient
 influence function and a 300-draw bootstrap of the same estimator land within a few percent of
 each other — two independent routes to the same standard error.
+
+## Does it run on a real subscriber base?
+
+A retention team at a media company has millions of subscribers, so this is not a rhetorical
+question. One million subscribers, twelve billing periods, on a laptop:
+
+| call | time | peak memory |
+|---|---|---|
+| `retained_periods_lift` (unadjusted) | 0.30s | 76 MB |
+| `retained_periods_lift` (stratified) | 1.54s | 138 MB |
+| `incremental_ltv` | 0.41s | 168 MB |
+| `churn_decomposition` | 0.18s | 97 MB |
+| `segment_scan` (8 segments) | 0.22s | 53 MB |
+| `retained_periods_lift` (adjusted) | 1.89s | 803 MB |
+| **`review`** (checks + both metrics + causes) | **1.89s** | **160 MB** |
+
+Ten times that — **ten million subscribers** — and everything is still under twenty seconds:
+`retained_periods_lift` 3.3s/0.5 GB, `segment_scan` 6.7s/0.8 GB, `review` 11.4s/0.7 GB. The
+algorithms are linear in subscribers, so a hundred million extrapolates to roughly half a minute
+and 5–8 GB — a server, not a laptop.
+
+Two properties are worth knowing because they are not the obvious ones. **Memory does not grow
+with the horizon**: the influence function forms no subscriber-by-period array at all, because
+both of its terms collapse to lookups into arrays of length `horizon`. And **`segment_scan`
+memory does not grow with the number of segments**, only with the number of dimensions scanned —
+cross-producting three dimensions into 18 segments costs less than scanning them as 8.
+
+`tests/test_scale.py` asserts these budgets, because reintroducing an `(n, horizon)` temporary in
+a hot path is easy and no correctness test would catch it. The optimisation history, including
+what turned out to be dead code, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## API
 
@@ -399,11 +418,16 @@ each other — two independent routes to the same standard error.
 | `duration_to_detect` | how long until this test can answer |
 | `qini` / `uplift_scores` | targeting |
 | `simulate_experiment` / `simulate_multi_arm` | ground-truth data for planning and validation |
-| `simulate_experiment` | ground-truth data for planning and validation |
+
+Twenty functions in total, of which a first analysis needs about seven. The rest of the public
+namespace is the result types those functions hand back — `LiftResult`, `SegmentScan`,
+`ExperimentReview` and so on — exported so they can be annotated and inspected, not because
+anything needs to construct them.
 
 Results render as HTML in Jupyter, and `SubliftError` / `PanelError` / `NotIdentifiedError`
-separate "your data is malformed" from "the data cannot answer that question". Both still
-subclass `ValueError`, so existing handlers keep working.
+separate "your data is malformed" from "the data cannot answer that question". Both still subclass
+`ValueError`, so existing handlers keep working.
+| `simulate_experiment` | ground-truth data for planning and validation |
 
 ## Assumptions and scope
 
