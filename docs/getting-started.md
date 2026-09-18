@@ -1,5 +1,18 @@
 # Getting started
 
+## The short version
+
+```python
+import sublift as sl
+
+panel = sl.SubscriberPanel.from_spans(df, ...)
+print(sl.review(panel, horizon=12, price=12.0, strata=["plan"]))
+```
+
+`review` runs the randomization and censoring checks, then the estimate, then tells you what to
+make of both — including the case where retention went up and lifetime value went down. The rest
+of this page is what it is doing and why, which is worth reading once.
+
 ## The question sublift answers
 
 > We ran a retention intervention against a holdout. How much lifetime value did it create,

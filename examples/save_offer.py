@@ -4,6 +4,10 @@ The scenario: subscribers who hit the cancel flow are randomized between the
 existing flow and a save offer -- 50% off for three billing periods. The offer
 works: people stay longer. The question is whether it was worth the margin.
 
+The whole analysis is one call to `sublift.review`, which is how you would
+actually use this. The rest of the script is that same analysis taken apart, to
+show what the checks are and why they run in that order.
+
 Run it:
 
     python examples/save_offer.py
@@ -36,6 +40,27 @@ panel = sim.panel
 print(panel)
 print(panel.describe().to_string(index=False))
 print()
+
+# --- the whole thing, in one call -------------------------------------------
+schedule_for_review = {
+    "control": np.full(HORIZON, PRICE),
+    "treatment": np.concatenate(
+        [np.full(DISCOUNT_PERIODS, PRICE * 0.5), np.full(HORIZON - DISCOUNT_PERIODS, PRICE)]
+    ),
+}
+print(
+    sl.review(
+        panel,
+        horizon=HORIZON,
+        price=schedule_for_review,
+        strata=["plan", "tenure_bucket"],
+        monitoring=True,
+    )
+    .summary()
+    .split("Incremental retained")[0]
+)
+print("=" * 78)
+print("Everything below is that same review, taken apart.\n")
 
 # --- 0. is the experiment even readable? -------------------------------------
 # Runs automatically on every estimate too, but look at it first: if assignment

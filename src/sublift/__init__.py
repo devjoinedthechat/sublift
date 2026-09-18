@@ -35,6 +35,7 @@ from .multiarm import ArmContrast, MultiArmResult, multi_arm_lift
 from .occupancy import occupancy_lift
 from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
+from .review import ExperimentReview, Finding, review
 from .segments import Heterogeneity, SegmentEffect, SegmentScan, segment_scan
 from .sequential import ConfidenceSequence, confidence_sequence
 from .survival import DiscreteSurvival, fit_survival, weighted_value
@@ -47,6 +48,9 @@ __all__ = [
     "incremental_ltv",
     "retained_periods_lift",
     "occupancy_lift",
+    "review",
+    "ExperimentReview",
+    "Finding",
     "segment_scan",
     "SegmentScan",
     "SegmentEffect",

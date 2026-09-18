@@ -11,6 +11,22 @@ slipped into a patch release.
 ## [Unreleased]
 
 ### Added
+- **`review`: one entry point that runs the checks in the order that matters.** The library had
+  grown to a dozen functions where knowing which to call when was most of the skill, and that
+  ordering lived only in the documentation — while the failure mode it guards against is
+  precisely calling `incremental_ltv` first, getting a tight interval, and shipping a decision on
+  an experiment whose randomization was broken.
+
+  `review` runs the diagnostics before the estimate, grades what it finds, and leads with the
+  grade. A **blocker** means the number is not measuring what it says, and the verdict reads *do
+  not act on this*; the estimate is still computed, because hiding it only invites someone to
+  compute it a worse way. A **warning** is a caveat. A **note** is a finding in its own right —
+  most usefully, retention up and lifetime value down.
+
+  It also picks the right estimand: a panel with spells gets occupancy rather than
+  time-to-first-cancellation, and `monitoring=True` leads with the anytime-valid interval instead
+  of the p-value. No new statistics; the existing estimators in the order an experienced analyst
+  would run them, with the verdict written down instead of assumed.
 - **`SubscriberPanel.from_spells` and `occupancy_lift`: subscriptions that come back.** People
   cancel and resubscribe, or pause over the summer. Time-to-first-cancellation records a
   subscriber who paid for periods 1–3 and 6–12 as churning at period 3.

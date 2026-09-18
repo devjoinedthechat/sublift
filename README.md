@@ -65,6 +65,39 @@ Requires Python 3.10+. Depends on numpy, scipy and pandas — nothing else.
 
 ## Quickstart
 
+One call runs the checks in the order that matters, then the estimate, then says what to make of
+both:
+
+```python
+import sublift as sl
+
+print(sl.review(panel, horizon=12, price=schedule, strata=["plan"], monitoring=True))
+```
+
+```
+Experiment review
+=================
+
+  VERDICT: no problems found in the checks sublift can run.
+
+  [note] Retention went up and lifetime value went down
+      The intervention bought +0.316 billing periods per subscriber and -12.184 in
+      value. Whatever it spent to hold those subscribers cost more than holding them
+      was worth. A retention-only readout would have called this a win.
+  ...
+```
+
+A **blocker** — a sample ratio mismatch, say — means the number below it is not measuring what
+it says, and the verdict reads *do not act on this*. The estimate is still computed, because
+hiding it only invites someone to go and compute it a worse way. A **warning** means the result
+stands with a caveat. A **note** is a finding in its own right.
+
+Nothing in `review` is new statistics. It is the existing estimators in the order an experienced
+analyst would run them, with the verdict written down instead of assumed. Everything it calls is
+available separately.
+
+## Building a panel
+
 Start from subscription dates, which is how the data actually leaves your warehouse:
 
 ```python
@@ -83,10 +116,13 @@ panel = sl.SubscriberPanel.from_spans(
     covariates=["plan", "tenure_bucket", "engagement"],
 )
 
+sl.review(panel, horizon=12, strata=["plan"])                    # all of the below, in order
 sl.check_randomization(panel)                                    # before anything else
+sl.check_censoring(panel)                                        # is censoring really benign?
 sl.incremental_ltv(panel, horizon=12, strata=["plan"])           # the money question
 sl.retained_periods_lift(panel, horizon=12, strata=["plan"])     # the retention question
 sl.churn_decomposition(panel, horizon=12)                        # which churn moved
+sl.segment_scan(panel, by=["plan"], horizon=12)                  # who it worked for
 sl.qini(panel, horizon=12, covariates=["engagement", "plan"])    # who to target
 ```
 
@@ -418,6 +454,7 @@ each other — two independent routes to the same standard error.
 
 | | |
 |---|---|
+| **`review`** | **the checks, the estimate and a verdict — start here** |
 | `SubscriberPanel.from_spans` | dates in, billing periods out — **start here** |
 | `.from_spells` | several paying spells per subscriber (win-backs, pauses) |
 | `.from_periods` / `.from_subjects` | already have period counts |
