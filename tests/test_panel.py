@@ -143,3 +143,44 @@ def test_revenue_is_laid_out_by_period():
     assert p.revenue.shape == (3, 3)
     assert p.revenue[1, 1] == 5.0
     assert np.isnan(p.revenue[2, 1])
+
+
+def test_only_the_long_constructors_can_catch_a_post_assignment_covariate():
+    """Pins what the README claims, because it claimed more than the code does.
+
+    A covariate measured after assignment can be a consequence of the treatment,
+    and adjusting for it reintroduces the bias randomisation removed. Constructors
+    that see several rows per subscriber can notice one changing mid-subscription.
+    Constructors that see a single row cannot -- there is nothing to compare it
+    against -- and `from_spans` is the recommended one, so this is the common case
+    rather than a corner.
+    """
+    long_form = long_frame(plan=["m", "m", "y", "y", "y", "y"])
+    with pytest.raises(PanelError, match="vary within a subject"):
+        SubscriberPanel.from_periods(
+            long_form,
+            subject="uid",
+            period="cycle",
+            churned="churned",
+            arm="variant",
+            covariates=["plan"],
+        )
+
+    wide = pd.DataFrame(
+        {
+            "uid": [1, 2],
+            "variant": ["a", "b"],
+            "n": [3, 3],
+            "ev": [True, False],
+            "measured_afterwards": [1.0, 0.0],
+        }
+    )
+    accepted = SubscriberPanel.from_subjects(
+        wide,
+        subject="uid",
+        arm="variant",
+        periods="n",
+        event="ev",
+        covariates=["measured_afterwards"],
+    )
+    assert "measured_afterwards" in accepted.covariates.columns

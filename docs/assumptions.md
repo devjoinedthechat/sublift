@@ -99,12 +99,27 @@ arms. On the same simulation the control arm's *level* is off by −0.15 periods
 
 ## 3. Covariates and strata are pre-assignment
 
-Anything measured after randomization can be a consequence of the treatment. Adjusting for it
-reintroduces exactly the bias randomization removed, and can flip a sign.
+Anything measured after randomisation can be a consequence of the treatment. Adjusting for it
+reintroduces exactly the bias randomisation removed, and can flip a sign.
 
-**Checked:** yes. The panel constructors reject covariates that vary within a subscriber. This
-catches the common case; it cannot catch a column that is constant per subscriber but was
-*computed* after assignment. Only you know that.
+**Checked:** partly, and where it is not checked is worth knowing.
+
+`from_periods` and `from_spells` see several rows per subscriber, so they can reject a covariate
+that changes within one, and they do. `from_spans` and `from_subjects` see a single row per
+subscriber — there is nothing to compare it against, so a post-assignment column passes straight
+through. `from_spans` is the recommended constructor, so this is the common case, not the corner.
+
+The balance report in `check_randomization` is a partial backstop: a column that is genuinely a
+consequence of the treatment usually shows up with a large standardised difference. It cannot
+tell that apart from chance imbalance, so it is a prompt to look, not a test.
+
+`complier_effect` is the deliberate exception. Its exposure column has to be measured after
+assignment — that is the whole point of it — which is why it is named in the call rather than
+inferred from the panel.
+
+`cuped` is where this matters most. Covariate adjustment with a post-assignment column produces a
+biased estimate; CUPED with one produces a *moved* estimate, because the imbalance it subtracts
+no longer has expectation zero under randomisation.
 
 ## 4. The horizon is within your follow-up
 

@@ -401,15 +401,31 @@ separate "your data is malformed" from "the data cannot answer that question". B
 Stated rather than buried:
 
 - **Assignment is randomised.** No observational identification.
-- **Censoring is administrative** — you cut the data on a date. Dropout that depends on subscriber
-  state violates this; `check_censoring` tests it and `censoring_sensitivity` bounds it.
-- **Baseline covariates only.** Adjusting for anything measured after assignment reintroduces the
-  bias randomisation removed; the panel constructors reject it.
+- **Censoring is administrative** — you cut the data on a date. Dropout that depends on
+  subscriber state violates this; `check_censoring` tests it and `censoring_sensitivity` bounds
+  it.
+- **Covariates are measured before assignment.** Adjusting for anything measured afterwards
+  reintroduces the bias randomisation removed. `from_periods` and `from_spells` see several rows
+  per subscriber and reject a covariate that changes within one; `from_spans` and `from_subjects`
+  see one row each and **cannot tell**, so there the rule is yours to keep. The balance check in
+  `check_randomization` is a partial backstop — a covariate that is genuinely post-assignment
+  usually shows up imbalanced — but it cannot distinguish that from chance.
+  `complier_effect` is the deliberate exception: its exposure column *must* be post-assignment,
+  which is why it is passed to that function explicitly rather than inferred.
 - **Subscribers are independent** unless you pass `cluster=`.
-- **Assignment equals exposure** unless you pass an exposure column to `complier_effect`,
-  which then rests on an exclusion restriction: assignment changes nothing for a subscriber
-  who never triggers.
+- **Assignment equals exposure** unless you pass an exposure column to `complier_effect`, which
+  then rests on an exclusion restriction: assignment changes nothing for a subscriber who never
+  triggers.
 - **Two arms** for the ordinary estimators; use `multi_arm_lift` for more.
+- **`occupancy_lift` needs potential follow-up recorded**, and refuses without it, because
+  otherwise "not paying in period nine" and "nobody observed period nine" are the same row.
+  `from_spells` and `from_spans` record it.
+- **`estimator="adjusted"` is asymptotic.** Its influence function is first-order, so coverage is
+  a large-sample promise: about 93% at 4,000 subscribers against a nominal 95%, nominal by around
+  16,000. It warns below 5,000. The other two estimators are exact at any size.
+- **`cuped` needs genuinely pre-period covariates.** Adjustment with a post-assignment covariate
+  biases the estimate; CUPED with one *moves* it, because the imbalance it subtracts no longer
+  has expectation zero.
 
 ### What is not here
 
