@@ -29,12 +29,19 @@ sim = sl.simulate_experiment(
     price=PRICE,
     treatment_discount=0.50,
     discount_periods=DISCOUNT_PERIODS,
+    involuntary_hazard=0.015,    # some subscribers leave because their card failed
     seed=2024,
 )
 panel = sim.panel
 print(panel)
 print(panel.describe().to_string(index=False))
 print()
+
+# --- 0. is the experiment even readable? -------------------------------------
+# Runs automatically on every estimate too, but look at it first: if assignment
+# is broken, nothing below is worth reading and no adjustment will rescue it.
+print(sl.check_randomization(panel, expected_ratio=0.5))
+print("\n" + "=" * 78 + "\n")
 
 # --- 1. did it retain anybody? ----------------------------------------------
 retention = sl.retained_periods_lift(
@@ -66,7 +73,14 @@ print(f"         and {ltv.estimate:+.2f} in lifetime value. It was {verdict}.")
 print(f"         (true effect in this simulation: {sim.true_ltv_lift:+.2f})")
 print()
 
-# --- 3. is it worth it for *everyone*? --------------------------------------
+# --- 3. which churn actually moved? -----------------------------------------
+# The offer is designed to stop cancellations. It cannot fix a declined card --
+# and by keeping subscribers alive longer it gives their card more chances to
+# fail, which shows up as a negative involuntary term.
+print(sl.churn_decomposition(panel, horizon=HORIZON))
+print("\n" + "=" * 78 + "\n")
+
+# --- 4. is it worth it for *everyone*? --------------------------------------
 curve = sl.qini(
     panel, horizon=HORIZON, covariates=["engagement", "plan", "tenure_bucket"],
     metric="ltv", price=schedule, fractions=np.arange(0.2, 1.01, 0.2),

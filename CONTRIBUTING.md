@@ -25,10 +25,11 @@ censoring, a different price schedule — extend `sublift.datasets` first, then 
 
 - An efficient influence function for the `adjusted` estimator, which would give it a
   confidence sequence. This is the largest known gap; see the roadmap in the README.
-- Competing risks: voluntary and involuntary churn as separate causes. A failed card and a
-  cancellation are different decisions and a save offer acts on only one of them.
 - Informative censoring via inverse-probability-of-censoring weights.
-- More than two arms.
+- More than two arms, with multiple-comparison control across segments.
+- A stratified or covariate-adjusted version of `churn_decomposition`; today it is
+  nonparametric only.
+- More billing realities in `sublift.datasets`: pauses, plan switches, proration, win-backs.
 
 ## Style
 

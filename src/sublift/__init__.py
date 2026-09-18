@@ -2,22 +2,28 @@
 
     import sublift as sl
 
-    panel = sl.SubscriberPanel.from_periods(
-        df, subject="user_id", period="cycle", churned="churned",
-        arm="variant", revenue="amount",
+    panel = sl.SubscriberPanel.from_spans(
+        df, subject="user_id", arm="variant",
+        assigned_at="assigned_at", ended_at="cancelled_at",
+        observed_through="2026-09-01", billing_interval="month",
+        price="mrr", cause="churn_reason",
         covariates=["plan", "tenure_bucket", "engagement"],
     )
     result = sl.incremental_ltv(panel, horizon=12, strata=["plan", "tenure_bucket"])
-    print(result)
-    print(result.confidence_sequence())
+    print(result)                              # point estimate, interval, curves
+    print(result.confidence_sequence())        # valid even if you peeked
+    print(sl.churn_decomposition(panel))       # voluntary vs involuntary
+    print(sl.check_randomization(panel))       # SRM and baseline balance
 
-Four things make this different from running a t-test on 30-day retention:
-the outcome is censored and handled as such, churn is modelled in discrete
-billing periods, the horizon is explicit, and the intervals stay valid when you
-look at them every day.
+Five things make this different from a t-test on 30-day retention: the outcome
+is censored and handled as such, churn is modelled in discrete billing periods,
+the horizon is explicit, voluntary and involuntary churn are separable, and the
+intervals stay valid when you look at them every day.
 """
 
+from .competing import CauseEffect, ChurnDecomposition, churn_decomposition
 from .datasets import SimulatedExperiment, simulate_experiment
+from .diagnostics import RandomizationCheck, check_randomization
 from .estimators import ArmSummary, LiftResult, incremental_ltv, retained_periods_lift
 from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
@@ -31,6 +37,11 @@ __all__ = [
     "SubscriberPanel",
     "incremental_ltv",
     "retained_periods_lift",
+    "churn_decomposition",
+    "ChurnDecomposition",
+    "CauseEffect",
+    "check_randomization",
+    "RandomizationCheck",
     "LiftResult",
     "ArmSummary",
     "confidence_sequence",

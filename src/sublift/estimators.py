@@ -34,6 +34,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from .diagnostics import warn_on_srm
 from .influence import contrast_influence, value_influence
 from .logistic import design_matrix, fit_logistic
 from .panel import SubscriberPanel
@@ -70,6 +71,9 @@ class LiftResult:
     inference: str
     influence: np.ndarray | None = None
     bootstrap_draws: np.ndarray | None = field(default=None, repr=False)
+    control_influence: np.ndarray | None = field(default=None, repr=False)
+    bootstrap_relative: np.ndarray | None = field(default=None, repr=False)
+    randomization: object | None = field(default=None, repr=False)
     strata_used: list[str] | None = None
     covariates_used: list[str] | None = None
     notes: list[str] = field(default_factory=list)
@@ -86,8 +90,39 @@ class LiftResult:
 
     @property
     def relative(self) -> float:
-        """Lift as a fraction of the control arm's value."""
+        """Lift as a fraction of the control arm's value -- the "+4.8%" everyone reports."""
         return self.estimate / self.control.value if self.control.value else float("nan")
+
+    @property
+    def relative_ci(self) -> tuple[float, float]:
+        """Interval for the relative lift.
+
+        Not the absolute interval divided by the control value: the denominator
+        is estimated too, and it is correlated with the numerator. This is the
+        delta-method interval for the ratio, built from the influence function
+        of both parts::
+
+            IF(Delta / V0) = [IF(Delta) - (Delta/V0) IF(V0)] / V0
+
+        For the bootstrap estimator the ratio is resampled directly. Reporting a
+        percentage lift without this is the most common way a correct analysis
+        still ends up with a wrong interval on the slide.
+        """
+        v0 = self.control.value
+        if not v0:
+            return (float("nan"), float("nan"))
+        z = float(stats.norm.ppf(1 - self.alpha / 2))
+        if self.bootstrap_relative is not None and self.bootstrap_relative.size:
+            lo, hi = np.percentile(
+                self.bootstrap_relative, [100 * self.alpha / 2, 100 * (1 - self.alpha / 2)]
+            )
+            return float(lo), float(hi)
+        if self.influence is None or self.control_influence is None:
+            return (float("nan"), float("nan"))
+        ratio = self.relative
+        psi = (self.influence - ratio * self.control_influence) / v0
+        se = float(np.sqrt((psi**2).sum()) / psi.size)
+        return float(ratio - z * se), float(ratio + z * se)
 
     @property
     def p_value(self) -> float:
@@ -164,6 +199,7 @@ def incremental_ltv(
     alpha: float = 0.05,
     n_boot: int = 200,
     allow_extrapolation: bool = False,
+    expected_ratio: float = 0.5,
     seed: int | None = 0,
 ) -> LiftResult:
     """Incremental lifetime value to ``horizon`` billing periods.
@@ -196,6 +232,7 @@ def incremental_ltv(
         alpha=alpha,
         n_boot=n_boot,
         allow_extrapolation=allow_extrapolation,
+        expected_ratio=expected_ratio,
         seed=seed,
     )
 
@@ -210,6 +247,7 @@ def retained_periods_lift(
     alpha: float = 0.05,
     n_boot: int = 200,
     allow_extrapolation: bool = False,
+    expected_ratio: float = 0.5,
     seed: int | None = 0,
 ) -> LiftResult:
     """Incremental billing periods retained -- restricted mean survival time, contrasted.
@@ -228,6 +266,7 @@ def retained_periods_lift(
         alpha=alpha,
         n_boot=n_boot,
         allow_extrapolation=allow_extrapolation,
+        expected_ratio=expected_ratio,
         seed=seed,
     )
 
@@ -235,7 +274,8 @@ def retained_periods_lift(
 # ------------------------------------------------------------------ routing
 
 
-def _estimate(panel, *, horizon, estimator, metric, strata, covariates, price, alpha, n_boot, allow_extrapolation, seed):
+def _estimate(panel, *, horizon, estimator, metric, strata, covariates, price, alpha, n_boot,
+              allow_extrapolation, seed, expected_ratio=0.5):
     if estimator not in _ESTIMATORS:
         raise ValueError(f"estimator must be one of {_ESTIMATORS}, got {estimator!r}.")
     if not 0 < alpha < 1:
@@ -244,6 +284,7 @@ def _estimate(panel, *, horizon, estimator, metric, strata, covariates, price, a
     horizon = _resolve_horizon(panel, horizon, allow_extrapolation)
     weights = _arm_weights(panel, horizon, metric, price)
     notes: list[str] = []
+    randomization = warn_on_srm(panel, expected_ratio)
 
     if estimator == "unadjusted":
         if strata:
@@ -262,8 +303,8 @@ def _estimate(panel, *, horizon, estimator, metric, strata, covariates, price, a
             raise ValueError("estimator='adjusted' needs covariates=[...] to adjust for.")
         out = _adjusted(panel, horizon, weights, list(covariates), n_boot, alpha, allow_extrapolation, seed)
 
-    estimate, se, arms, influence, boot, inference = out
-    ci = _interval(estimate, se, alpha, boot)
+    ci = _interval(out["estimate"], out["se"], alpha, out.get("boot"))
+    estimate, se = out["estimate"], out["se"]
 
     return LiftResult(
         estimator=estimator,
@@ -273,11 +314,14 @@ def _estimate(panel, *, horizon, estimator, metric, strata, covariates, price, a
         se=se,
         ci=ci,
         alpha=alpha,
-        arms=arms,
+        arms=out["arms"],
         n_subjects=panel.n_subjects,
-        inference=inference,
-        influence=influence,
-        bootstrap_draws=boot,
+        inference=out["inference"],
+        influence=out.get("influence"),
+        bootstrap_draws=out.get("boot"),
+        control_influence=out.get("control_influence"),
+        bootstrap_relative=out.get("boot_relative"),
+        randomization=randomization,
         strata_used=list(strata) if strata and estimator == "stratified" else None,
         covariates_used=list(covariates) if covariates and estimator == "adjusted" else None,
         notes=notes,
@@ -377,12 +421,24 @@ def _unadjusted(panel, horizon, weights, allow_extrapolation):
         )
 
     estimate = values[1] - values[0]
-    psi_stacked = contrast_influence(infs[1], infs[0], panel.n_subjects)
-    psi = np.empty(panel.n_subjects)
+    n = panel.n_subjects
+    psi_stacked = contrast_influence(infs[1], infs[0], n)
+    psi = np.empty(n)
     psi[panel.arm == 1] = psi_stacked[: infs[1].size]
     psi[panel.arm == 0] = psi_stacked[infs[1].size :]
-    se = float(np.sqrt((psi**2).sum()) / panel.n_subjects)
-    return estimate, se, arms, psi, None, "influence"
+
+    # The control arm's own value, on the whole-sample scale, for the ratio interval.
+    psi_control = np.zeros(n)
+    psi_control[panel.arm == 0] = infs[0] / (infs[0].size / n)
+
+    return {
+        "estimate": estimate,
+        "se": float(np.sqrt((psi**2).sum()) / n),
+        "arms": arms,
+        "influence": psi,
+        "control_influence": psi_control,
+        "inference": "influence",
+    }
 
 
 # -------------------------------------------------------------- stratified
@@ -418,6 +474,8 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
 
     n = panel.n_subjects
     psi = np.zeros(n)
+    psi_control = np.zeros(n)
+    control_values = np.zeros(len(levels))
     deltas = np.zeros(len(levels))
     shares = np.zeros(len(levels))
     per_arm_value = {0: 0.0, 1: 0.0}
@@ -442,6 +500,9 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
             vals[a], infos[a] = value, inf
             p_ak = sizes[a] / in_k.sum()
             psi[mask] = (1 if a == 1 else -1) * inf / p_ak
+            if a == 0:
+                psi_control[mask] = inf / p_ak
+                control_values[k] = value
             per_arm_surv[a] += surv.survival * in_k.sum()
             per_arm_risk[a] += surv.at_risk
         deltas[k] = vals[1] - vals[0]
@@ -454,8 +515,9 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
     pi = shares / total
     estimate = float(pi @ deltas)
 
-    psi = psi[kept]
-    psi = psi + (deltas[codes[kept]] - estimate)
+    control_total = float(pi @ control_values)
+    psi = psi[kept] + (deltas[codes[kept]] - estimate)
+    psi_control = psi_control[kept] + (control_values[codes[kept]] - control_total)
     m = int(kept.sum())
     se = float(np.sqrt((psi**2).sum()) / m)
 
@@ -474,9 +536,14 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
             weights=weights[a][0],
         )
 
-    full_psi = np.zeros(n)
-    full_psi[kept] = psi
-    return estimate, se, arms, full_psi[kept], None, "influence"
+    return {
+        "estimate": estimate,
+        "se": se,
+        "arms": arms,
+        "influence": psi,
+        "control_influence": psi_control,
+        "inference": "influence",
+    }
 
 
 # ---------------------------------------------------------------- adjusted
@@ -504,18 +571,29 @@ def _adjusted(panel, horizon, weights, covariates, n_boot, alpha, allow_extrapol
     X_sub, names, enc = design_matrix(panel.covariates[covariates])
     rows, period, churn, capped, starts = _person_period(panel, horizon)
 
-    point = _gcomp(panel, horizon, weights, X_sub, rows, period, churn)
+    estimate, arms = _gcomp(panel, horizon, weights, X_sub, rows, period, churn)
     rng = np.random.default_rng(seed)
-    draws = np.empty(n_boot)
     n = panel.n_subjects
+    draws = np.empty(n_boot)
+    rel_draws = np.empty(n_boot)
     for b in range(n_boot):
         idx = rng.integers(0, n, size=n)
-        draws[b] = _gcomp_boot(panel, horizon, weights, X_sub, idx, capped, starts, period, churn)
+        diff, ctrl = _gcomp_boot(panel, horizon, weights, X_sub, idx, capped, starts, period, churn)
+        draws[b] = diff
+        rel_draws[b] = diff / ctrl if ctrl else np.nan
 
-    draws = draws[np.isfinite(draws)]
+    ok = np.isfinite(draws)
+    draws = draws[ok]
+    rel_draws = rel_draws[np.isfinite(rel_draws)]
     se = float(draws.std(ddof=1)) if draws.size > 1 else float("nan")
-    estimate, arms = point
-    return estimate, se, arms, None, draws, "bootstrap"
+    return {
+        "estimate": estimate,
+        "se": se,
+        "arms": arms,
+        "boot": draws,
+        "boot_relative": rel_draws,
+        "inference": "bootstrap",
+    }
 
 
 def _fit_hazards(arm_rows_mask, X_sub, rows, period, churn, horizon):
@@ -569,7 +647,7 @@ def _gcomp_boot(panel, horizon, weights, X_sub, idx, capped, starts, period, chu
     lens = capped[idx]
     total = int(lens.sum())
     if total == 0:
-        return np.nan
+        return np.nan, np.nan
     offsets = np.concatenate(([0], np.cumsum(lens)[:-1]))
     gather = np.repeat(starts[idx] - offsets, lens) + np.arange(total)
     b_rows = np.repeat(np.arange(idx.size), lens)
@@ -581,10 +659,10 @@ def _gcomp_boot(panel, horizon, weights, X_sub, idx, capped, starts, period, chu
     for a in (0, 1):
         mask = arm_b[b_rows] == a
         if not mask.any():
-            return np.nan
+            return np.nan, np.nan
         fit = _fit_hazards(mask, X_b, b_rows, b_period, b_churn, horizon)
         curves[a] = _predict_curve(fit, X_b, horizon)
     values = [
         float(np.sum(weights[a][0] * np.concatenate(([1.0], curves[a][:-1])))) for a in (0, 1)
     ]
-    return values[1] - values[0]
+    return values[1] - values[0], values[0]

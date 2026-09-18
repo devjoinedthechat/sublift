@@ -93,8 +93,34 @@ print(f"   fixed-sample 95% interval excluded 0 at some point:  {fixed_alarms / 
 print(f"   anytime-valid 95% sequence excluded 0 at some point: {cs_alarms / reps:6.1%}")
 print("   Nominal false-positive rate: 5%.")
 
+# ----------------------------------------------------------- competing risks
+rule("4. Competing risks: are the cause-specific intervals calibrated?")
+
+reps_cr = 300
+ests: dict[str, list] = {}
+ses: dict[str, list] = {}
+truth_cr = None
+for r in range(reps_cr):
+    sim = sl.simulate_experiment(
+        n=8000, horizon=HORIZON, observation_window=13, seed=200_000 + r,
+        involuntary_hazard=0.018, treatment_odds_ratio=0.80,
+    )
+    for c in sl.churn_decomposition(sim.panel, horizon=HORIZON).causes:
+        ests.setdefault(c.label, []).append(c.estimate)
+        ses.setdefault(c.label, []).append(c.se)
+    truth_cr = sim.true_periods_saved
+
+print(f"   {'cause':<14s} {'true':>9s} {'mean est':>9s} {'bias':>9s} {'mean se':>9s} {'actual sd':>10s}")
+for label, values in ests.items():
+    e = np.array(values)
+    print(
+        f"   {label:<14s} {truth_cr[label]:>+9.4f} {e.mean():>+9.4f} "
+        f"{e.mean() - truth_cr[label]:>+9.4f} {np.mean(ses[label]):>9.5f} {e.std(ddof=1):>10.5f}"
+    )
+print("   (a standard error claims to be the spread of the estimates; these are both)")
+
 # -------------------------------------------------------------------- uplift
-rule("4. Uplift: why the default learner is not a T-learner")
+rule("5. Uplift: why the default learner is not a T-learner")
 print(f"   {'regime':<32s} {'T-learner':>10s} {'pooled+shrunk':>14s}")
 covs = ["engagement", "plan", "tenure_bucket"]
 for em, label in ((0.0, "constant odds ratio"), (1.5, "strong effect modification")):

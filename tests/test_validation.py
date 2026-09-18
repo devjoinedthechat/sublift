@@ -13,7 +13,7 @@ Seeds are fixed, so the assertions are deterministic rather than flaky.
 import numpy as np
 import pytest
 
-from sublift import retained_periods_lift, simulate_experiment
+from sublift import churn_decomposition, retained_periods_lift, simulate_experiment
 
 pytestmark = pytest.mark.slow
 
@@ -204,3 +204,51 @@ def test_a_single_look_at_a_fixed_sample_test_is_still_calibrated():
         false_alarms += res.ci[0] > 0 or res.ci[1] < 0
     rate = false_alarms / reps
     assert 0.02 <= rate <= 0.09, f"single-look false alarm rate {rate:.1%}, expected ~5%"
+
+
+# ------------------------------------------------------------- competing risks
+
+
+def test_cause_specific_effects_are_unbiased_and_calibrated():
+    """The authoritative check on the competing-risks influence functions.
+
+    Compares the reported standard error against the actual spread of the
+    estimates across independent experiments, which is what a standard error
+    claims to be. A bootstrap on one dataset is a proxy for this; this is the
+    thing itself.
+    """
+    reps = 400
+    ests: dict[str, list[float]] = {}
+    ses: dict[str, list[float]] = {}
+    truth = None
+    for r in range(reps):
+        sim = simulate_experiment(
+            n=8000, horizon=8, observation_window=13, seed=200_000 + r,
+            involuntary_hazard=0.018, treatment_odds_ratio=0.80,
+        )
+        for c in churn_decomposition(sim.panel, horizon=8).causes:
+            ests.setdefault(c.label, []).append(c.estimate)
+            ses.setdefault(c.label, []).append(c.se)
+        truth = sim.true_periods_saved
+
+    for label, values in ests.items():
+        e = np.array(values)
+        mc_se = e.std(ddof=1) / np.sqrt(reps)
+        assert abs(e.mean() - truth[label]) < 3.5 * mc_se, f"{label}: biased"
+        ratio = float(np.mean(ses[label]) / e.std(ddof=1))
+        assert 0.92 <= ratio <= 1.08, f"{label}: reported se is {ratio:.3f} of the actual spread"
+
+
+def test_cause_specific_intervals_cover():
+    reps = 400
+    covered: dict[str, int] = {}
+    for r in range(reps):
+        sim = simulate_experiment(
+            n=8000, horizon=8, observation_window=13, seed=300_000 + r,
+            involuntary_hazard=0.018, treatment_odds_ratio=0.80,
+        )
+        for c in churn_decomposition(sim.panel, horizon=8).causes:
+            hit = c.ci[0] <= sim.true_periods_saved[c.label] <= c.ci[1]
+            covered[c.label] = covered.get(c.label, 0) + int(hit)
+    for label, hits in covered.items():
+        assert 0.92 <= hits / reps <= 0.98, f"{label}: {hits / reps:.1%} coverage"

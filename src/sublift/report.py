@@ -21,12 +21,18 @@ def format_result(result) -> str:
     sign = "+" if result.estimate >= 0 else ""
     head = f"{'Incremental LTV' if result.metric == 'ltv' else 'Incremental retained periods'} over {result.horizon} billing periods"
 
+    rel_lo, rel_hi = result.relative_ci
+    rel = (
+        f"{result.relative:+.2%} [{rel_lo:+.2%}, {rel_hi:+.2%}]"
+        if rel_lo == rel_lo
+        else f"{result.relative:+.2%}"
+    )
     lines = [
         head,
         "=" * len(head),
-        f"  {sign}{result.estimate:,.4f} {unit} per subscriber "
-        f"({result.relative:+.1%} vs {ctrl.label})",
+        f"  {sign}{result.estimate:,.4f} {unit} per subscriber",
         f"  {conf} CI [{lo:+,.4f}, {hi:+,.4f}]   se {result.se:,.4f}   p = {result.p_value:.4f}",
+        f"  relative to {ctrl.label}: {rel}",
         "",
         f"  {ctrl.label:<12s} n={ctrl.n:>8,}   value {ctrl.value:>12,.4f}",
         f"  {treat.label:<12s} n={treat.n:>8,}   value {treat.value:>12,.4f}",
@@ -52,6 +58,14 @@ def format_result(result) -> str:
             "  the p-value above assumes this is the only look you have taken.",
         ]
 
+    check = getattr(result, "randomization", None)
+    if check is not None and check.srm_flagged:
+        lines += [
+            "",
+            f"  !! SAMPLE RATIO MISMATCH (p = {check.srm_p_value:.1e}). The arms are not the",
+            "     sizes randomization should have produced, so nothing above is trustworthy.",
+            "     Run sublift.check_randomization() and fix the pipeline first.",
+        ]
     if result.notes:
         lines += [""] + [f"  note: {n}" for n in result.notes]
     return "\n".join(lines)
