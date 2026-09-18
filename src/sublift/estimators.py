@@ -236,6 +236,8 @@ def incremental_ltv(
     strata: Sequence[str] | None = None,
     covariates: Sequence[str] | None = None,
     censoring_covariates: Sequence[str] | None = None,
+    learner=None,
+    n_folds: int = 5,
     price: float | np.ndarray | dict | None = None,
     alpha: float = 0.05,
     n_boot: int = 200,
@@ -271,6 +273,8 @@ def incremental_ltv(
         strata=strata,
         covariates=covariates,
         censoring_covariates=censoring_covariates,
+        learner=learner,
+        n_folds=n_folds,
         price=price,
         alpha=alpha,
         n_boot=n_boot,
@@ -289,6 +293,8 @@ def retained_periods_lift(
     strata: Sequence[str] | None = None,
     covariates: Sequence[str] | None = None,
     censoring_covariates: Sequence[str] | None = None,
+    learner=None,
+    n_folds: int = 5,
     alpha: float = 0.05,
     n_boot: int = 200,
     allow_extrapolation: bool = False,
@@ -309,6 +315,8 @@ def retained_periods_lift(
         strata=strata,
         covariates=covariates,
         censoring_covariates=censoring_covariates,
+        learner=learner,
+        n_folds=n_folds,
         price=None,
         alpha=alpha,
         n_boot=n_boot,
@@ -331,6 +339,8 @@ def _estimate(
     strata,
     covariates,
     censoring_covariates=None,
+    learner=None,
+    n_folds=5,
     price=None,
     alpha,
     n_boot,
@@ -376,6 +386,8 @@ def _estimate(
             seed,
             inference=inference,
             censoring_covariates=censoring_covariates,
+            learner=learner,
+            n_folds=n_folds,
         )
 
     ci = _interval(out["estimate"], out["se"], alpha, out.get("boot"))
@@ -652,6 +664,8 @@ def _adjusted(
     seed,
     inference="influence",
     censoring_covariates=None,
+    learner=None,
+    n_folds=5,
 ):
     """Covariate-adjusted g-computation, corrected by its efficient influence function.
 
@@ -678,6 +692,14 @@ def _adjusted(
     The price is the inverse-censoring weight ``1/Gbar(s-1)``. When very few
     subscribers could have been observed to the horizon those weights blow up,
     which :mod:`sublift.censoring` warns about rather than absorbing silently.
+
+    ``learner`` swaps the built-in logistic hazard for any classifier with
+    ``fit`` and ``predict_proba`` -- a gradient booster, a random forest, a
+    calibrated neural net. That is only sound with cross-fitting, which is
+    applied automatically whenever a learner is given: a flexible model fitted on
+    the same rows the estimate is read from carries a bias of the same order as
+    the effect, and the augmentation does not remove it. Cross-fitting is what
+    separates double machine learning from using machine learning.
 
     The other price is asymptotic. Being asymptotically linear is a large-sample
     property, and in simulation this estimator's intervals cover at about 93% at
@@ -735,10 +757,9 @@ def _adjusted(
         )
     values, eifs, arms, notes = {}, {}, {}, []
     for a in (0, 1):
-        mask = panel.arm[rows] == a
-        fit = _fit_hazards(mask, X_sub, rows, period, churn, horizon)
         w = weights[a][0]
-        curve, curve_lagged, weighted = _standardize(panel, fit, X_sub, gbar, horizon, a, w)
+        hazard_for = _hazard_provider(panel, X_sub, rows, period, churn, horizon, a, learner, n_folds, seed)
+        curve, curve_lagged, weighted = _standardize(panel, hazard_for, gbar, horizon, a, w)
 
         values[a] = float((w * curve_lagged).sum())
         # IF_i = sum_t w_t (lagged_i[t] - mean_t), and the second term is the same for
@@ -782,7 +803,7 @@ def _adjusted(
 _CHUNK = 100_000
 
 
-def _standardize(panel, fit, X_sub, gbar, horizon, arm, weights):
+def _standardize(panel, hazard_for, gbar, horizon, arm, weights):
     """Corrected survival curve, its lag, and each subscriber's weighted contribution.
 
     One pass over blocks of subscribers, accumulating the column sums that make the
@@ -804,7 +825,7 @@ def _standardize(panel, fit, X_sub, gbar, horizon, arm, weights):
         at_risk = periods >= grid
         churned_at = (periods == grid) & panel.event[block][:, None]
 
-        hazard = _individual_hazard(fit, X_sub[block], horizon)
+        hazard = hazard_for(np.arange(lo, hi))
         survival = np.cumprod(1.0 - hazard, axis=1)
 
         in_arm = (panel.arm[block] == arm)[:, None]
@@ -821,6 +842,87 @@ def _standardize(panel, fit, X_sub, gbar, horizon, arm, weights):
         weighted[block] = lagged @ weights
 
     return corrected_sum / n, lagged_sum / n, weighted
+
+
+def _hazard_provider(panel, X_sub, rows, period, churn, horizon, arm, learner, n_folds, seed):
+    """A function mapping subscriber positions to their (m, horizon) hazard matrix.
+
+    With the built-in logistic and no learner, one model is fitted on the arm's
+    person-periods and used for everybody -- correct, because a parametric model
+    fitted by maximum likelihood satisfies the conditions the one-step correction
+    needs.
+
+    A flexible learner does not. Fitting a gradient booster on the same rows the
+    estimate is read from leaves a bias of the same order as the effect, and no
+    amount of augmentation removes it. So a learner is always **cross-fitted**:
+    the hazard for a subscriber comes from a model that never saw them. That is
+    the difference between double machine learning and using machine learning.
+    """
+    in_arm = panel.arm[rows] == arm
+    if learner is None:
+        fit = _fit_hazards(in_arm, X_sub, rows, period, churn, horizon)
+        return lambda idx: _individual_hazard(fit, X_sub[idx], horizon)
+
+    folds = np.random.default_rng(seed).permutation(panel.n_subjects) % n_folds
+    models = []
+    for k in range(n_folds):
+        train = in_arm & (folds[rows] != k)
+        if not train.any() or churn[train].sum() == 0:
+            models.append(None)
+            continue
+        models.append(_fit_learner(learner, train, X_sub, rows, period, churn, horizon))
+
+    fallback = _fit_hazards(in_arm, X_sub, rows, period, churn, horizon)
+
+    def predict(idx):
+        out = np.empty((len(idx), horizon))
+        for k in range(n_folds):
+            held = folds[idx] == k
+            if not held.any():
+                continue
+            model = models[k]
+            out[held] = (
+                _predict_learner(model, X_sub[idx[held]], horizon)
+                if model is not None
+                else _individual_hazard(fallback, X_sub[idx[held]], horizon)
+            )
+        return out
+
+    return predict
+
+
+def _fit_learner(learner, mask, X_sub, rows, period, churn, horizon):
+    """Clone-and-fit a user-supplied classifier on person-period rows."""
+    from copy import deepcopy
+
+    r, t, y = rows[mask], period[mask], churn[mask]
+    design = _person_period_design(X_sub, r, t, horizon)
+    model = deepcopy(learner)
+    model.fit(design, y)
+    return model
+
+
+def _predict_learner(model, X_block, horizon):
+    """Hazard for each subscriber in each period, from a fitted classifier."""
+    m = X_block.shape[0]
+    rows = np.repeat(np.arange(m), horizon)
+    periods = np.tile(np.arange(1, horizon + 1), m)
+    design = _person_period_design(X_block, rows, periods, horizon)
+    if hasattr(model, "predict_proba"):
+        probabilities = np.asarray(model.predict_proba(design))[:, 1]
+    else:
+        probabilities = np.asarray(model.predict(design)).ravel()
+    return np.clip(probabilities.reshape(m, horizon), 1e-9, 1 - 1e-9)
+
+
+def _person_period_design(X_sub, rows, period, horizon):
+    """[one-hot period | covariates], filled in place."""
+    width = horizon + (X_sub.shape[1] if X_sub.size else 0)
+    design = np.zeros((period.size, width))
+    design[np.arange(period.size), period - 1] = 1.0
+    if X_sub.size:
+        design[:, horizon:] = X_sub[rows]
+    return design
 
 
 def _individual_hazard(fit, X_all, horizon):

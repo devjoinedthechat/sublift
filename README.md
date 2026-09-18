@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo-light.svg" alt="" width="108" height="96">
+  </picture>
+</p>
+
 <h1 align="center">sublift</h1>
 
 <p align="center">
@@ -9,7 +16,7 @@
 <p align="center">
   <a href="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml"><img src="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.10–3.13">
-  <img src="https://img.shields.io/badge/tests-278-brightgreen" alt="278 tests">
+  <img src="https://img.shields.io/badge/tests-300-brightgreen" alt="300 tests">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <img src="https://img.shields.io/badge/dependencies-numpy%20%C2%B7%20scipy%20%C2%B7%20pandas-lightgrey" alt="numpy · scipy · pandas">
@@ -203,6 +210,27 @@ it. The split is an exact identity, not an attribution, so causes sum to the hea
 residual — and it surfaces effects a single hazard cannot express, such as retention *increasing*
 exposure to payment failure.
 
+**[Pre-period variance reduction](docs/getting-started.md)** — `cuped`. The strongest variance
+reducer available is rarely a cleverer estimator; it is the subscriber's own behaviour before
+randomisation. The usual CUPED derivation is for a difference in means, and this estimand is not
+one — but any estimator that exposes an influence function is a mean of it, and a covariate's
+imbalance between arms is another, so projecting the first onto the second works for survival,
+occupancy, competing risks or a segment alike. Pre-period tenure alone removes **11%** of the
+variance in simulation, and it never touches the outcome model.
+
+**Triggered interventions** — `complier_effect`. A save offer fires when someone opens the cancel
+flow, so most of the base never meets it. Intention to treat — what every estimator here reports —
+is the effect of *being assigned*, which is what a launch decision wants. The complier effect is
+what the offer does to someone who sees it, which is what a design decision wants. At a 25%
+trigger rate they differ by a factor of four, and quoting the second as the first overstates the
+programme by exactly the reciprocal of the exposure rate.
+
+**Flexible nuisance models** — `learner=`. `adjusted` fits a logistic hazard by default. Pass any
+classifier with `fit` and `predict_proba` and it is **cross-fitted automatically**: a flexible
+model fitted on the same rows the estimate is read from carries a bias of the same order as the
+effect, and the augmentation does not remove it. Cross-fitting is the difference between double
+machine learning and using machine learning.
+
 **Clustered randomisation** — `cluster=`. When accounts are randomised but subscriptions are
 analysed, subscriptions within an account are not independent, and intervals computed as if they
 were come out too narrow with no warning. Pass the unit you actually randomised and every interval
@@ -350,6 +378,8 @@ a hot path is easy and no correctness test would catch it.
 | `multi_arm_lift` | many arms vs one control, family-wise error control |
 | `segment_scan` | effects by segment, without manufacturing findings |
 | `correct_family` | correct across any family you assembled yourself |
+| `cuped` | variance reduction from pre-period behaviour |
+| `complier_effect` | effect among the exposed, for triggered interventions |
 | `SubscriberPanel.contrast` | pull one comparison out of a multi-arm panel |
 | `LiftResult.confidence_sequence` | anytime-valid interval |
 | `LiftResult.relative_ci` | interval for the % lift (delta method, not `ci / control`) |
@@ -376,19 +406,19 @@ Stated rather than buried:
 - **Baseline covariates only.** Adjusting for anything measured after assignment reintroduces the
   bias randomisation removed; the panel constructors reject it.
 - **Subscribers are independent** unless you pass `cluster=`.
+- **Assignment equals exposure** unless you pass an exposure column to `complier_effect`,
+  which then rests on an exclusion restriction: assignment changes nothing for a subscriber
+  who never triggers.
 - **Two arms** for the ordinary estimators; use `multi_arm_lift` for more.
 
 ### What is not here
 
 - **Stratified or covariate-adjusted competing risks.** `churn_decomposition` is nonparametric.
-- **A hazard model that is not logistic.** Flexible enough in practice with a saturated time
-  baseline, but it is a parametric choice and it is made for you.
-- **Pre-period outcome adjustment (CUPED).** Covariate adjustment is supported; using the
-  pre-period value of the same metric, usually the strongest variance reducer available, is not
-  yet first-class.
-- **Non-compliance.** Assignment is assumed to equal exposure. An intervention that only fires on
-  a trigger needs an intention-to-treat reading, which sublift gives, or a complier effect, which
-  it does not.
+- **A default beyond the logistic hazard.** Any cross-fitted classifier can be passed via
+  `learner=`, but the built-in default is parametric, and nothing here selects a learner for you.
+- **Two-sided non-compliance.** `complier_effect` handles the usual shape, where the control arm
+  cannot receive the treatment. Genuine two-sided crossover leans on monotonicity, which is
+  reported but not tested.
 - **Informative censoring, solved.** It is detected, partly corrected and bounded. It is not
   solved, here or anywhere, and the docs say so with the numbers.
 

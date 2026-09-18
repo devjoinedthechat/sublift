@@ -22,6 +22,8 @@ intervals stay valid when you look at them every day.
 """
 
 from .competing import CauseEffect, ChurnDecomposition, churn_decomposition
+from .compliance import ComplierEffect, complier_effect
+from .cuped import cuped
 from .datasets import SimulatedExperiment, simulate_experiment, simulate_multi_arm
 from .diagnostics import (
     CensoringCheck,
@@ -58,6 +60,9 @@ __all__ = [
     "SubscriberPanel",
     "incremental_ltv",
     "retained_periods_lift",
+    "cuped",
+    "complier_effect",
+    "ComplierEffect",
     "occupancy_lift",
     "occupancy_decomposition",
     "OccupancyDecomposition",
