@@ -46,8 +46,9 @@ import pandas as pd
 from scipy import stats
 
 from .clustering import influence_se
+from .estimators import _kept_codes
 from .exceptions import NotIdentifiedError, PanelError
-from .panel import SubscriberPanel
+from .panel import SubscriberPanel, stratum_codes
 from .survival import fit_survival
 
 __all__ = ["churn_decomposition", "ChurnDecomposition", "CauseEffect"]
@@ -133,14 +134,17 @@ def churn_decomposition(
     panel: SubscriberPanel,
     *,
     horizon: int | None = None,
+    strata: list[str] | None = None,
     alpha: float = 0.05,
     allow_extrapolation: bool = False,
 ) -> ChurnDecomposition:
     """Split the incremental retained periods by cause of churn.
 
     Requires a panel built with ``cause=`` (see :meth:`SubscriberPanel.from_spans`).
-    Nonparametric, like ``estimator="unadjusted"``; the total it reports is
-    identical to :func:`retained_periods_lift` at the same horizon.
+    The total it reports is identical to :func:`retained_periods_lift` at the same
+    horizon and with the same ``strata``, which is the point: a report that
+    stratifies its headline and then decomposes it without stratifying shows two
+    numbers that should agree and do not.
     """
     if panel.cause is None:
         raise PanelError(
@@ -159,39 +163,31 @@ def churn_decomposition(
         )
 
     n_causes = len(panel.cause_labels)
-    per_arm = {}
-    for a in (0, 1):
-        mask = panel.arm == a
-        per_arm[a] = _arm_decomposition(
-            panel.n_periods[mask],
-            panel.event[mask],
-            panel.cause[mask],
-            horizon,
-            n_causes,
-            allow_extrapolation,
-        )
-
     n = panel.n_subjects
-    p = {a: float((panel.arm == a).sum()) / n for a in (0, 1)}
-
-    causes: list[CauseEffect] = []
-    total_psi = np.zeros(n)
     z = float(stats.norm.ppf(1 - alpha / 2))
 
+    if strata:
+        estimates, influences, lost_by_arm, used = _stratified_causes(
+            panel, horizon, n_causes, list(strata), allow_extrapolation
+        )
+    else:
+        estimates, influences, lost_by_arm, used = _pooled_causes(
+            panel, horizon, n_causes, allow_extrapolation
+        )
+
+    codes = _kept_codes(panel.cluster, used)
+    causes: list[CauseEffect] = []
+    total_psi = np.zeros(influences.shape[1])
+
     for j, label in enumerate(panel.cause_labels):
-        lost = {a: per_arm[a]["lost"][j] for a in (0, 1)}
-        estimate = -(lost[1] - lost[0])
-        psi = np.zeros(n)
-        # Saved periods are minus the change in periods lost, so the influence
-        # terms carry the opposite sign to the usual contrast.
-        psi[panel.arm == 1] = -per_arm[1]["influence"][j] / p[1]
-        psi[panel.arm == 0] = per_arm[0]["influence"][j] / p[0]
-        se = influence_se(psi, panel.cluster, n)
+        estimate = float(estimates[j])
+        psi = influences[j]
+        se = influence_se(psi, codes, n)
         causes.append(
             CauseEffect(
                 label=label,
-                periods_lost_control=lost[0],
-                periods_lost_treatment=lost[1],
+                periods_lost_control=lost_by_arm[j][0],
+                periods_lost_treatment=lost_by_arm[j][1],
                 estimate=estimate,
                 se=se,
                 ci=(estimate - z * se, estimate + z * se),
@@ -200,7 +196,7 @@ def churn_decomposition(
         total_psi += psi
 
     total = float(sum(c.estimate for c in causes))
-    total_se = influence_se(total_psi, panel.cluster, n)
+    total_se = influence_se(total_psi, codes, n)
     return ChurnDecomposition(
         horizon=horizon,
         total=total,
@@ -280,3 +276,90 @@ def _arm_decomposition(n_periods, event, cause, horizon, n_causes, allow_extrapo
             influence[j, block] = (term_survival + term_hazard).sum(axis=1)
 
     return {"lost": lost, "influence": influence, "survival": surv}
+
+
+def _pooled_causes(panel, horizon, n_causes, allow_extrapolation):
+    """Cause-specific effects over the whole base."""
+    n = panel.n_subjects
+    per_arm, shares = {}, {}
+    for a in (0, 1):
+        mask = panel.arm == a
+        shares[a] = float(mask.sum()) / n
+        per_arm[a] = _arm_decomposition(
+            panel.n_periods[mask],
+            panel.event[mask],
+            panel.cause[mask],
+            horizon,
+            n_causes,
+            allow_extrapolation,
+        )
+
+    estimates = np.zeros(n_causes)
+    influences = np.zeros((n_causes, n))
+    lost_by_arm = []
+    for j in range(n_causes):
+        lost = {a: per_arm[a]["lost"][j] for a in (0, 1)}
+        estimates[j] = -(lost[1] - lost[0])
+        # Saved periods are minus the change in periods lost, so the influence terms
+        # carry the opposite sign to the usual contrast.
+        influences[j, panel.arm == 1] = -per_arm[1]["influence"][j] / shares[1]
+        influences[j, panel.arm == 0] = per_arm[0]["influence"][j] / shares[0]
+        lost_by_arm.append({0: lost[0], 1: lost[1]})
+    return estimates, influences, lost_by_arm, np.ones(n, dtype=bool)
+
+
+def _stratified_causes(panel, horizon, n_causes, strata, allow_extrapolation):
+    """The same, within pre-assignment strata, recombined on stratum shares.
+
+    Carries both influence terms for the same reason the ordinary stratified
+    estimator does: the within-stratum estimation error, and the error in the
+    stratum shares themselves. Dropping the second understates the variance
+    exactly when a cause behaves differently across strata.
+    """
+    if panel.covariates is None:
+        raise PanelError("Panel carries no covariates; rebuild it with covariates=[...].")
+    missing = [c for c in strata if c not in panel.covariates.columns]
+    if missing:
+        raise PanelError(f"Strata column(s) {missing} not in the panel's covariates.")
+
+    codes, levels = stratum_codes(panel.covariates, strata)
+    n = panel.n_subjects
+    influences = np.zeros((n_causes, n))
+    per_stratum = np.zeros((n_causes, len(levels)))
+    lost = np.zeros((2, n_causes, len(levels)))
+    shares = np.zeros(len(levels))
+    kept = np.zeros(n, dtype=bool)
+
+    for s_index in range(len(levels)):
+        in_s = codes == s_index
+        sizes = {a: int((in_s & (panel.arm == a)).sum()) for a in (0, 1)}
+        if min(sizes.values()) < 2:
+            continue
+        kept |= in_s
+        shares[s_index] = in_s.sum()
+        for a in (0, 1):
+            mask = in_s & (panel.arm == a)
+            piece = _arm_decomposition(
+                panel.n_periods[mask],
+                panel.event[mask],
+                panel.cause[mask],
+                horizon,
+                n_causes,
+                allow_extrapolation,
+            )
+            conditional = sizes[a] / in_s.sum()
+            sign = -1.0 if a == 1 else 1.0
+            for j in range(n_causes):
+                lost[a, j, s_index] = piece["lost"][j]
+                influences[j, mask] = sign * piece["influence"][j] / conditional
+        per_stratum[:, s_index] = -(lost[1, :, s_index] - lost[0, :, s_index])
+
+    total = shares.sum()
+    if total == 0:
+        raise NotIdentifiedError("Every stratum was too small to estimate; use coarser strata.")
+    pi = shares / total
+
+    estimates = per_stratum @ pi
+    influences = influences[:, kept] + (per_stratum[:, codes[kept]] - estimates[:, None])
+    lost_by_arm = [{a: float(lost[a, j] @ pi) for a in (0, 1)} for j in range(n_causes)]
+    return estimates, influences, lost_by_arm, kept

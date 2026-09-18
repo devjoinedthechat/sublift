@@ -157,7 +157,7 @@ def review(
     resolved = (retention or value).horizon if (retention or value) else (horizon or 0)
 
     _margin(retention, value, findings)
-    decomposition = _decomposition(panel, resolved, alpha, allow_extrapolation, findings)
+    decomposition = _decomposition(panel, resolved, strata, alpha, allow_extrapolation, findings)
     scan = _segments(panel, segments, resolved, alpha, allow_extrapolation, findings)
     sensitivity = _fragility(panel, resolved, allow_extrapolation, findings)
     _monitoring(retention or value, monitoring, findings)
@@ -317,11 +317,15 @@ def _margin(retention, value, findings):
         )
 
 
-def _decomposition(panel, horizon, alpha, extrapolate, findings):
+def _decomposition(panel, horizon, strata, alpha, extrapolate, findings):
     if panel.cause is None or panel.n_arms > 2:
         return None
     try:
-        result = churn_decomposition(panel, horizon=horizon, alpha=alpha, allow_extrapolation=extrapolate)
+        # Same strata as the headline, so the causes sum to the number printed above
+        # them rather than to a different one computed a different way.
+        result = churn_decomposition(
+            panel, horizon=horizon, strata=strata, alpha=alpha, allow_extrapolation=extrapolate
+        )
     except SubliftError:
         return None
 

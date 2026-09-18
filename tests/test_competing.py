@@ -3,7 +3,12 @@
 import numpy as np
 import pytest
 
-from sublift import churn_decomposition, retained_periods_lift, simulate_experiment
+from sublift import (
+    PanelError,
+    churn_decomposition,
+    retained_periods_lift,
+    simulate_experiment,
+)
 
 
 @pytest.fixture(scope="module")
@@ -103,3 +108,51 @@ def test_frame_has_a_row_per_cause(sim):
     f = churn_decomposition(sim.panel, horizon=8).to_frame()
     assert len(f) == 2
     assert f["share_of_effect"].sum() == pytest.approx(1.0, rel=1e-9)
+
+
+# ------------------------------------------------------------------- stratified
+
+STRATA = ["plan", "tenure_bucket"]
+
+
+def test_stratified_causes_still_sum_exactly(sim):
+    split = churn_decomposition(sim.panel, horizon=8, strata=STRATA)
+    assert sum(c.estimate for c in split.causes) == pytest.approx(split.total, rel=1e-12)
+
+
+def test_the_decomposition_reconciles_with_the_headline_it_decomposes(sim):
+    """A report that stratifies its headline and not its split shows two numbers that
+    should agree and do not. They must match on both the estimate and the interval."""
+    for strata, estimator in ((None, "unadjusted"), (STRATA, "stratified")):
+        headline = retained_periods_lift(sim.panel, horizon=8, estimator=estimator, strata=strata)
+        split = churn_decomposition(sim.panel, horizon=8, strata=strata)
+        assert split.total == pytest.approx(headline.estimate, rel=1e-10)
+        assert split.total_se == pytest.approx(headline.se, rel=1e-10)
+
+
+def test_stratifying_moves_the_answer(sim):
+    """Otherwise the argument is not being passed through."""
+    pooled = churn_decomposition(sim.panel, horizon=8)
+    split = churn_decomposition(sim.panel, horizon=8, strata=STRATA)
+    assert split.total != pooled.total
+    assert abs(split.total - pooled.total) < 4 * pooled.total_se
+
+
+def test_each_cause_still_recovers_its_truth_when_stratified(sim):
+    split = churn_decomposition(sim.panel, horizon=8, strata=STRATA)
+    for cause in split.causes:
+        truth = sim.true_periods_saved[cause.label]
+        assert abs(cause.estimate - truth) < 3.0 * cause.se, cause.label
+
+
+def test_unknown_strata_are_rejected(sim):
+    with pytest.raises(PanelError, match="not in the panel"):
+        churn_decomposition(sim.panel, horizon=8, strata=["nonexistent"])
+
+
+def test_review_decomposes_with_the_same_strata_as_its_headline(sim):
+    from sublift import review
+
+    result = review(sim.panel, horizon=8, strata=STRATA)
+    assert result.decomposition is not None
+    assert result.decomposition.total == pytest.approx(result.retention.estimate, rel=1e-10)

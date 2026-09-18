@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo-light.svg" alt="" width="108" height="96">
+    <img src="assets/logo-light.svg" alt="" width="92" height="98">
   </picture>
 </p>
 
@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml"><img src="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.10–3.13">
-  <img src="https://img.shields.io/badge/tests-300-brightgreen" alt="300 tests">
+  <img src="https://img.shields.io/badge/tests-306-brightgreen" alt="306 tests">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <img src="https://img.shields.io/badge/dependencies-numpy%20%C2%B7%20scipy%20%C2%B7%20pandas-lightgrey" alt="numpy · scipy · pandas">
@@ -207,7 +207,7 @@ the *control* arm, so at a 20% win-back rate it overstates the win by **44%**.
 **[Voluntary vs involuntary churn](docs/competing-risks.md)** — `churn_decomposition`. A fifth to
 two fifths of subscription churn is a failed card, not a decision, and a save offer cannot act on
 it. The split is an exact identity, not an attribution, so causes sum to the headline with no
-residual — and it surfaces effects a single hazard cannot express, such as retention *increasing*
+residual — against a stratified headline too, if you pass the same `strata=` — and it surfaces effects a single hazard cannot express, such as retention *increasing*
 exposure to payment failure.
 
 **[Pre-period variance reduction](docs/getting-started.md)** — `cuped`. The strongest variance
@@ -413,7 +413,8 @@ Stated rather than buried:
 
 ### What is not here
 
-- **Stratified or covariate-adjusted competing risks.** `churn_decomposition` is nonparametric.
+- **Covariate-adjusted competing risks.** `churn_decomposition` takes `strata=` and reconciles
+  exactly with a stratified headline, but there is no covariate-adjusted version.
 - **A default beyond the logistic hazard.** Any cross-fitted classifier can be passed via
   `learner=`, but the built-in default is parametric, and nothing here selects a learner for you.
 - **Two-sided non-compliance.** `complier_effect` handles the usual shape, where the control arm
