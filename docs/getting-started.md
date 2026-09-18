@@ -59,6 +59,16 @@ This also runs automatically on every estimate and warns. If it reports a sample
 mismatch, **stop**. Something upstream is filtering subscribers differently by arm, and no
 statistical adjustment rescues that — the estimate is measuring your pipeline.
 
+Then check that people are leaving your dataset for boring reasons:
+
+```python
+print(sl.check_censoring(panel, covariates=["plan", "tenure_bucket", "engagement_pre"]))
+```
+
+If you built the panel with `from_spans`, this is settled by construction and it will say so.
+Otherwise it tests whether censoring depends on who the subscriber is — see
+[assumptions](assumptions.md#2-censoring-is-administrative) for what to do if it does.
+
 ## 3. Ask both questions
 
 ```python

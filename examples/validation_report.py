@@ -138,8 +138,51 @@ for label, values in ests.items():
     )
 print("   (a standard error claims to be the spread of the estimates; these are both)")
 
+# ---------------------------------------------------- informative censoring
+rule("5. Informative censoring: how bad, and how much does adjustment help?")
+print("   Subscribers are lost to follow-up at a rate driven by engagement, which also")
+print("   drives churn -- the situation every estimator here assumes cannot happen.")
+
+
+def _informative(n, seed):
+    return sl.simulate_experiment(
+        n=n,
+        horizon=HORIZON,
+        observation_window=14,
+        seed=seed,
+        dropout_hazard=0.08,
+        dropout_depends_on_engagement=2.4,
+    )
+
+
+configs_ic = [
+    ("unadjusted", {"estimator": "unadjusted"}),
+    ("adjusted, covariate in", {"estimator": "adjusted", "covariates": ADJ_COVS}),
+    ("adjusted, covariate out", {"estimator": "adjusted", "covariates": ["plan", "tenure_bucket"]}),
+    (
+        "  + IPCW",
+        {
+            "estimator": "adjusted",
+            "covariates": ["plan", "tenure_bucket"],
+            "censoring_covariates": ADJ_COVS,
+        },
+    ),
+]
+print(f"   {'':<26s} {'bias':>9s} {'coverage':>9s}")
+for name, kw in configs_ic:
+    bias, covered = [], 0
+    for r in range(120):
+        sim = _informative(20_000, 5000 + r)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = sl.retained_periods_lift(sim.panel, horizon=HORIZON, **kw)
+        bias.append(res.estimate - sim.true_rmst_lift)
+        covered += res.ci[0] <= sim.true_rmst_lift <= res.ci[1]
+    print(f"   {name:<26s} {np.mean(bias):>+9.4f} {covered / 120:>8.1%}")
+print("   (true effect +0.2587; detectable and partly correctable, not solvable)")
+
 # -------------------------------------------------------------------- uplift
-rule("5. Uplift: why the default learner is not a T-learner")
+rule("6. Uplift: why the default learner is not a T-learner")
 print(f"   {'regime':<32s} {'T-learner':>10s} {'pooled+shrunk':>14s}")
 covs = ["engagement", "plan", "tenure_bucket"]
 for em, label in ((0.0, "constant odds ratio"), (1.5, "strong effect modification")):

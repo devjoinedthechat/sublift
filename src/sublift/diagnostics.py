@@ -15,15 +15,22 @@ five minutes of checking.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
+from .exceptions import PanelError
 from .panel import SubscriberPanel
 
-__all__ = ["check_randomization", "RandomizationCheck"]
+__all__ = [
+    "check_randomization",
+    "RandomizationCheck",
+    "check_censoring",
+    "CensoringCheck",
+]
 
 # The community-standard SRM threshold. Deliberately far stricter than 0.05:
 # with a genuinely random assignment this fires once in a thousand experiments,
@@ -169,3 +176,135 @@ def warn_on_srm(panel: SubscriberPanel, expected_ratio: float = 0.5) -> Randomiz
             stacklevel=3,
         )
     return check
+
+
+@dataclass
+class CensoringCheck:
+    """Whether censoring looks administrative, or looks like it depends on the subscriber."""
+
+    known_exactly: bool
+    n_censored: int
+    lr_statistic: float
+    lr_p_value: float
+    df: int
+    coefficients: pd.DataFrame | None
+    alpha: float = 0.01
+
+    @property
+    def depends_on_covariates(self) -> bool:
+        return (not self.known_exactly) and self.lr_p_value < self.alpha
+
+    @property
+    def ok(self) -> bool:
+        return self.known_exactly or not self.depends_on_covariates
+
+    def __str__(self) -> str:
+        lines = ["Censoring check", "==============="]
+        if self.known_exactly:
+            lines += [
+                f"  {self.n_censored:,} subscribers censored, and potential follow-up is recorded.",
+                "",
+                "  Censoring is administrative: every subscriber's follow-up was fixed by their",
+                "  assignment date and the data cut, so it cannot depend on anything they did.",
+                "  This is the good case and nothing further is needed.",
+            ]
+            return "\n".join(lines)
+
+        lines.append(f"  {self.n_censored:,} subscribers censored; potential follow-up not recorded.")
+        lines.append(
+            f"  Does censoring depend on baseline covariates?  LR chi2({self.df}) = "
+            f"{self.lr_statistic:.1f}, p = {self.lr_p_value:.2e}"
+        )
+        if self.coefficients is not None and len(self.coefficients):
+            lines.append("")
+            lines.append("  censoring log-odds per unit of covariate:")
+            ordered = self.coefficients.reindex(
+                self.coefficients["coefficient"].abs().sort_values(ascending=False).index
+            )
+            for _, r in ordered.head(8).iterrows():
+                lines.append(f"    {r['covariate']:<28s} {r['coefficient']:+.3f}")
+
+        if self.depends_on_covariates:
+            lines += [
+                "",
+                "  CENSORING IS NOT INDEPENDENT. Subscribers are leaving the data for reasons",
+                "  related to who they are, so the product-limit estimator -- and therefore",
+                "  estimator='unadjusted' and estimator='stratified' -- is biased.",
+                "",
+                "  What to do: use estimator='adjusted' with these covariates. Censoring that",
+                "  depends only on X is independent *given* X, so a hazard model containing X",
+                "  removes most of the bias. In simulation that holds the bias roughly flat",
+                "  while the nonparametric estimators drift by 4x.",
+            ]
+        else:
+            lines += ["", "  No evidence that censoring depends on these covariates."]
+        return "\n".join(lines)
+
+
+def check_censoring(
+    panel: SubscriberPanel,
+    covariates: Sequence[str] | None = None,
+    *,
+    alpha: float = 0.01,
+) -> CensoringCheck:
+    """Test the assumption that censoring is independent of the subscriber.
+
+    Every estimator here assumes subscribers are censored for reasons unrelated
+    to their propensity to churn -- normally true, because the data cut is a
+    calendar fact. It stops being true when subscribers are *lost* rather than
+    merely not-yet-observed: accounts deleted, a cohort dropped by a migration,
+    a plan the extract stopped covering.
+
+    That failure is silent. The estimate still prints a tight interval; it is
+    just measuring a population that quietly selected itself. This is the one
+    assumption in sublift that used to be untestable, and it is testable whenever
+    the panel carries baseline covariates: fit the censoring hazard with and
+    without them and compare the fits.
+
+    If ``potential_followup`` is recorded, censoring is administrative by
+    construction and the question does not arise.
+    """
+    from scipy import stats as _stats
+
+    from .censoring import censoring_person_period
+    from .logistic import design_matrix, fit_logistic
+
+    n_censored = int((~panel.event).sum())
+    if panel.potential_followup is not None:
+        return CensoringCheck(True, n_censored, 0.0, 1.0, 0, None, alpha)
+
+    if panel.covariates is None:
+        raise PanelError(
+            "Censoring cannot be checked without baseline covariates. Rebuild the panel with "
+            "covariates=[...], or record potential_followup, which settles the question outright."
+        )
+    cols = list(covariates) if covariates else list(panel.covariates.columns)
+    missing = [c for c in cols if c not in panel.covariates.columns]
+    if missing:
+        raise PanelError(f"Covariate(s) {missing} not in the panel's covariates.")
+
+    horizon = panel.followup
+    X, names, _ = design_matrix(panel.covariates[cols])
+    rows, period, censored = censoring_person_period(panel, horizon)
+    if censored.sum() == 0 or X.shape[1] == 0:
+        return CensoringCheck(False, n_censored, 0.0, 1.0, 0, None, alpha)
+
+    dummies = np.zeros((period.size, horizon))
+    dummies[np.arange(period.size), period - 1] = 1.0
+    full = np.hstack([dummies, X[rows]])
+
+    fit_null = fit_logistic(dummies, censored)
+    fit_full = fit_logistic(full, censored)
+    statistic = 2.0 * (_loglik(full, censored, fit_full.coef) - _loglik(dummies, censored, fit_null.coef))
+    df = X.shape[1]
+    p_value = float(_stats.chi2.sf(max(statistic, 0.0), df))
+
+    coefficients = pd.DataFrame(
+        {"covariate": names, "coefficient": fit_full.coef[horizon:]}
+    )
+    return CensoringCheck(False, n_censored, float(statistic), p_value, df, coefficients, alpha)
+
+
+def _loglik(X: np.ndarray, y: np.ndarray, coef: np.ndarray) -> float:
+    eta = X @ coef
+    return float(np.sum(y * eta - np.logaddexp(0.0, eta)))

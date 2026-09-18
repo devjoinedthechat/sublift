@@ -17,14 +17,54 @@ cannot catch assignment that was never random but is balanced by luck.
 Subscribers are censored because you cut the data on a date, not because of anything correlated
 with their propensity to churn.
 
-This holds for the usual case: a retention experiment analysed at a fixed date, where
-follow-up length is set by enrollment date. It **fails** if subscribers leave your dataset for
-reasons related to their state — an account deletion flow that correlates with dissatisfaction,
-a migration that dropped a cohort, a failed card that also predicts cancellation and removes
-the row entirely rather than marking it churned.
+This holds for the usual case: a retention experiment analysed at a fixed date, where follow-up
+length is set by enrollment date. It **fails** when subscribers are *lost* rather than merely
+not-yet-observed — an account deletion flow that correlates with dissatisfaction, a migration
+that dropped a cohort, a plan the extract stopped covering.
 
-**Checked:** no. This is the assumption most likely to be silently violated, and sublift cannot
-test it. Inverse-probability-of-censoring weighting for informative censoring is on the roadmap.
+**Checked:** yes.
+
+```python
+print(sl.check_censoring(panel, covariates=[...]))
+```
+
+If the panel records `potential_followup` (which `from_spans` does automatically), censoring is
+administrative by construction and the question does not arise. Otherwise sublift fits the
+censoring hazard with and without your covariates and compares the fits. If censoring depends on
+who the subscriber is, it says so and tells you what to do.
+
+### What to do when it fires
+
+**Use `estimator="adjusted"` with the covariates that drive censoring.** Censoring that depends
+only on `X` is independent *given* `X`, so a hazard model containing `X` removes most of the
+bias. Measured on sublift's simulator, with dropout driven hard by engagement and a true effect
+of +0.2587:
+
+| | bias | coverage |
+|---|---|---|
+| `unadjusted` | +0.0179 | 94.0% |
+| `adjusted`, with engagement | **+0.0077** | 94.7% |
+| `adjusted`, engagement omitted | +0.0176 | 93.3% |
+| …plus `censoring_covariates=` | +0.0136 | 92.7% |
+
+Two honest readings of that table:
+
+- Adjustment does most of the work — it more than halves the bias, and only when the offending
+  covariate is actually in the model.
+- `censoring_covariates=` (inverse-probability-of-censoring weighting) is a **partial hedge, not
+  a cure**. It helps when the outcome model is incomplete, and it buys nothing when the outcome
+  model is already right. It is available for that reason and no stronger one.
+
+### The thing to take away
+
+Informative censoring is **detectable and partly correctable, not solvable**. No estimator here
+eliminates it. If `check_censoring` fires, the number is directional: treat a 3% effect as
+"probably positive", not as "+3.0%". The value of the check is that you know which kind of
+number you are holding.
+
+A contrast is also far more forgiving than a level, because the bias largely cancels between
+arms. On the same simulation the control arm's *level* is off by −0.15 periods while the
+*contrast* is off by +0.02. Quote the contrast; be much more careful quoting a survival curve.
 
 ## 3. Covariates and strata are pre-assignment
 

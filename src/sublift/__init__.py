@@ -23,7 +23,12 @@ intervals stay valid when you look at them every day.
 
 from .competing import CauseEffect, ChurnDecomposition, churn_decomposition
 from .datasets import SimulatedExperiment, simulate_experiment
-from .diagnostics import RandomizationCheck, check_randomization
+from .diagnostics import (
+    CensoringCheck,
+    RandomizationCheck,
+    check_censoring,
+    check_randomization,
+)
 from .estimators import ArmSummary, LiftResult, incremental_ltv, retained_periods_lift
 from .exceptions import EstimationError, NotIdentifiedError, PanelError, SubliftError
 from .panel import SubscriberPanel
@@ -43,6 +48,8 @@ __all__ = [
     "CauseEffect",
     "check_randomization",
     "RandomizationCheck",
+    "check_censoring",
+    "CensoringCheck",
     "LiftResult",
     "ArmSummary",
     "confidence_sequence",

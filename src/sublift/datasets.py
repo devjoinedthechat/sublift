@@ -78,6 +78,8 @@ def simulate_experiment(
     treatment_discount: float = 0.0,
     discount_periods: int = 3,
     staggered_enrollment: bool = True,
+    dropout_hazard: float = 0.0,
+    dropout_depends_on_engagement: float = 0.0,
     seed: int | None = 0,
 ) -> SimulatedExperiment:
     """Simulate one randomized retention experiment.
@@ -114,6 +116,21 @@ def simulate_experiment(
         Fraction off ``price`` given to the treatment arm for its first
         ``discount_periods`` periods. Set it to make the estimand honest: a save
         offer that buys retention with margin should not look free.
+    dropout_hazard
+        Per-period probability of being lost to follow-up for reasons other than
+        the data cut -- an account deleted, a cohort dropped by a migration, a
+        subscriber who moves to a plan the extract does not cover. Unlike
+        administrative censoring this is *not* known in advance, so a panel
+        generated with dropout carries no ``potential_followup`` and the
+        censoring distribution has to be estimated.
+    dropout_depends_on_engagement
+        Makes that dropout **informative**: the log-odds of dropping out shift by
+        this much per standard deviation of engagement. At ``0`` dropout is
+        independent of everything and the product-limit estimator stays
+        unbiased. Above zero it is confounded with churn, every estimator that
+        assumes independent censoring is biased, and inverse-probability-of-
+        censoring weighting is needed. Use it to check whether an analysis is
+        robust to the assumption it is quietly making.
     involuntary_hazard
         Per-period probability of *involuntary* churn -- a failed payment that
         dunning does not recover. Set above zero and the simulated experiment
@@ -149,14 +166,25 @@ def simulate_experiment(
     if not 0.0 <= involuntary_hazard < 1.0:
         raise ValueError("involuntary_hazard must be in [0, 1).")
     lifetime, cause = _draw_lifetimes(rng, hazard, involuntary_hazard)
-    censor = _censoring(rng, n, observation_window, staggered_enrollment)
+    administrative = _censoring(rng, n, observation_window, staggered_enrollment)
+    if dropout_hazard > 0 or dropout_depends_on_engagement:
+        engagement = X[:, 0] if with_covariates else np.zeros(n)
+        censor = _dropout(
+            rng, administrative, engagement, dropout_hazard,
+            dropout_depends_on_engagement, observation_window,
+        )
+        informative = True
+    else:
+        censor = administrative
+        informative = False
     n_periods = np.minimum(lifetime, censor)
     event = lifetime <= censor
 
     weights = _price_schedule(price, treatment_discount, discount_periods, observation_window)
     observed_cause = np.where(event, cause, -1)
     frame = _to_frame(
-        arm, n_periods, event, cov_frame, weights, observed_cause, involuntary_hazard > 0, censor
+        arm, n_periods, event, cov_frame, weights, observed_cause, involuntary_hazard > 0,
+        None if informative else censor,
     )
 
     panel = SubscriberPanel.from_periods(
@@ -169,7 +197,7 @@ def simulate_experiment(
         covariates=list(cov_frame.columns) if cov_frame is not None else None,
         revenue="revenue",
         cause="churn_reason" if involuntary_hazard > 0 else None,
-        potential_followup="potential_followup",
+        potential_followup=None if informative else "potential_followup",
     )
 
     truth = _truth(
@@ -282,6 +310,23 @@ def _draw_lifetimes(rng, hazard: np.ndarray, involuntary: float):
     lifetime[alive] = periods + 1  # survived the whole window; censored in practice
     cause[alive] = -1
     return lifetime, cause
+
+
+def _dropout(rng, administrative, engagement, base, slope, window) -> np.ndarray:
+    """Loss to follow-up on top of the data cut, optionally driven by a covariate.
+
+    When ``slope`` is non-zero the same covariate that predicts churn also
+    predicts disappearing from the data, which is exactly the situation under
+    which "censoring is independent" fails and a product-limit estimate drifts.
+    """
+    if base <= 0:
+        base = 1e-9
+    logit = np.log(base / (1 - base)) + slope * engagement
+    hazard = _expit(logit)
+    draws = rng.random((engagement.size, window))
+    dropped = draws < hazard[:, None]
+    first = np.where(dropped.any(axis=1), dropped.argmax(axis=1) + 1, window + 1)
+    return np.minimum(administrative, first).astype(np.int64)
 
 
 def _censoring(rng, n: int, window: int, staggered: bool) -> np.ndarray:

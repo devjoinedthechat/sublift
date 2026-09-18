@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from .censoring import censoring_survival
+from .censoring import censoring_survival, conditional_censoring_survival
 from .diagnostics import warn_on_srm
 from .exceptions import NotIdentifiedError
 from .influence import contrast_influence, value_influence
@@ -205,6 +205,7 @@ def incremental_ltv(
     estimator: str = "stratified",
     strata: Sequence[str] | None = None,
     covariates: Sequence[str] | None = None,
+    censoring_covariates: Sequence[str] | None = None,
     price: float | np.ndarray | dict | None = None,
     alpha: float = 0.05,
     n_boot: int = 200,
@@ -239,6 +240,7 @@ def incremental_ltv(
         metric="ltv",
         strata=strata,
         covariates=covariates,
+        censoring_covariates=censoring_covariates,
         price=price,
         alpha=alpha,
         n_boot=n_boot,
@@ -256,6 +258,7 @@ def retained_periods_lift(
     estimator: str = "stratified",
     strata: Sequence[str] | None = None,
     covariates: Sequence[str] | None = None,
+    censoring_covariates: Sequence[str] | None = None,
     alpha: float = 0.05,
     n_boot: int = 200,
     allow_extrapolation: bool = False,
@@ -275,6 +278,7 @@ def retained_periods_lift(
         metric="retained_periods",
         strata=strata,
         covariates=covariates,
+        censoring_covariates=censoring_covariates,
         price=None,
         alpha=alpha,
         n_boot=n_boot,
@@ -296,7 +300,8 @@ def _estimate(
     metric,
     strata,
     covariates,
-    price,
+    censoring_covariates=None,
+    price=None,
     alpha,
     n_boot,
     allow_extrapolation,
@@ -339,6 +344,7 @@ def _estimate(
             allow_extrapolation,
             seed,
             inference=inference,
+            censoring_covariates=censoring_covariates,
         )
 
     ci = _interval(out["estimate"], out["se"], alpha, out.get("boot"))
@@ -599,7 +605,8 @@ def _person_period(panel: SubscriberPanel, horizon: int):
 
 
 def _adjusted(
-    panel, horizon, weights, covariates, n_boot, alpha, allow_extrapolation, seed, inference="influence"
+    panel, horizon, weights, covariates, n_boot, alpha, allow_extrapolation, seed,
+    inference="influence", censoring_covariates=None,
 ):
     """Covariate-adjusted g-computation, corrected by its efficient influence function.
 
@@ -665,7 +672,12 @@ def _adjusted(
             "inference": "bootstrap",
         }
 
-    gbar, gbar_source = censoring_survival(panel, horizon)
+    if censoring_covariates:
+        gbar = conditional_censoring_survival(panel, horizon, list(censoring_covariates))
+        gbar_source = "modelled on " + ", ".join(censoring_covariates)
+    else:
+        marginal, gbar_source = censoring_survival(panel, horizon)
+        gbar = marginal[None, :]
     n = panel.n_subjects
     if n < _ADJUSTED_MIN_N:
         warnings.warn(
@@ -693,7 +705,7 @@ def _adjusted(
         # Inverse-censoring-weighted residuals, divided through by the subject's own
         # survival so the running sum telescopes into S(t|X)/S(s|X) -- a ratio that is
         # always <= 1, which is what keeps the augmentation bounded.
-        contribution = in_arm * residual / (share * gbar[None, :])
+        contribution = in_arm * residual / (share * gbar)
         accumulated = np.cumsum(contribution / np.maximum(surv_i, 1e-12), axis=1)
 
         corrected = surv_i * (1.0 - accumulated)

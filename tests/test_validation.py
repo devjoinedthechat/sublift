@@ -13,7 +13,12 @@ Seeds are fixed, so the assertions are deterministic rather than flaky.
 import numpy as np
 import pytest
 
-from sublift import churn_decomposition, retained_periods_lift, simulate_experiment
+from sublift import (
+    check_censoring,
+    churn_decomposition,
+    retained_periods_lift,
+    simulate_experiment,
+)
 
 pytestmark = pytest.mark.slow
 
@@ -307,3 +312,92 @@ def test_cause_specific_intervals_cover():
             covered[c.label] = covered.get(c.label, 0) + int(hit)
     for label, hits in covered.items():
         assert 0.92 <= hits / reps <= 0.98, f"{label}: {hits / reps:.1%} coverage"
+
+
+# ------------------------------------------------------- informative censoring
+
+
+def _informative(n, seed):
+    return simulate_experiment(
+        n=n,
+        horizon=8,
+        observation_window=14,
+        seed=seed,
+        dropout_hazard=0.08,
+        dropout_depends_on_engagement=2.4,
+    )
+
+
+def test_informative_censoring_biases_the_nonparametric_estimators():
+    """Pins the failure mode, so the docs are describing something real.
+
+    Subscribers are lost to follow-up at a rate driven by engagement, which also
+    drives churn. The product-limit estimator assumes that cannot happen.
+    """
+    reps = 120
+    bias = []
+    for r in range(reps):
+        sim = _informative(20_000, 5000 + r)
+        res = retained_periods_lift(sim.panel, horizon=8, estimator="unadjusted")
+        bias.append(res.estimate - sim.true_rmst_lift)
+    mean_bias = float(np.mean(bias))
+    # True effect is about +0.26, so this is several percent of the thing being measured,
+    # and unlike sampling error it does not shrink with n.
+    assert mean_bias > 0.010, f"expected a visible upward bias, saw {mean_bias:+.4f}"
+
+
+def test_covariate_adjustment_removes_most_of_that_bias():
+    """The practical remedy, and the reason check_censoring points at it.
+
+    Censoring that depends only on X is independent *given* X, so a hazard model
+    containing X is most of the fix. It is not all of it -- informative censoring
+    is not something any estimator here fully solves -- which is why the
+    diagnostic tells you it is happening rather than silently correcting.
+    """
+    reps = 120
+    plain, adjusted = [], []
+    for r in range(reps):
+        sim = _informative(20_000, 5000 + r)
+        plain.append(
+            retained_periods_lift(sim.panel, horizon=8, estimator="unadjusted").estimate - sim.true_rmst_lift
+        )
+        adjusted.append(
+            retained_periods_lift(
+                sim.panel,
+                horizon=8,
+                estimator="adjusted",
+                covariates=["engagement", "plan", "tenure_bucket"],
+            ).estimate
+            - sim.true_rmst_lift
+        )
+    plain_bias, adj_bias = abs(float(np.mean(plain))), abs(float(np.mean(adjusted)))
+    assert adj_bias < 0.65 * plain_bias, (
+        f"adjustment cut the bias only from {plain_bias:.4f} to {adj_bias:.4f}"
+    )
+
+
+def test_the_censoring_check_fires_exactly_when_it_should():
+    """A diagnostic is worth nothing if it cries wolf, or misses the wolf."""
+    flagged_when_informative = 0
+    flagged_when_independent = 0
+    reps = 40
+    for r in range(reps):
+        flagged_when_informative += check_censoring(
+            _informative(8000, 9000 + r).panel, ["engagement", "plan", "tenure_bucket"]
+        ).depends_on_covariates
+        benign = simulate_experiment(
+            n=8000,
+            horizon=8,
+            observation_window=14,
+            seed=9000 + r,
+            dropout_hazard=0.08,
+            dropout_depends_on_engagement=0.0,
+        )
+        flagged_when_independent += check_censoring(
+            benign.panel, ["engagement", "plan", "tenure_bucket"]
+        ).depends_on_covariates
+
+    assert flagged_when_informative == reps, "missed informative censoring"
+    assert flagged_when_independent <= 2, (
+        f"false alarms on {flagged_when_independent}/{reps} independent-censoring experiments"
+    )

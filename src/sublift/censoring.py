@@ -26,9 +26,15 @@ import warnings
 
 import numpy as np
 
+from .exceptions import PanelError
 from .panel import SubscriberPanel
 
-__all__ = ["censoring_survival", "CensoringWarning"]
+__all__ = [
+    "censoring_survival",
+    "conditional_censoring_survival",
+    "censoring_person_period",
+    "CensoringWarning",
+]
 
 # Below this, inverse-censoring weights start to dominate the variance and the
 # augmentation term becomes numerically unreliable.
@@ -104,3 +110,73 @@ def _reverse_km(n_periods: np.ndarray, event: np.ndarray, horizon: int) -> np.nd
     if horizon > 1:
         gbar[1:] = np.cumprod(1.0 - hazard[: horizon - 1])
     return gbar
+
+
+def censoring_person_period(panel: SubscriberPanel, horizon: int):
+    """Rows on which a subscriber was eligible to be *seen* censored.
+
+    One row per subscriber-period at risk, with the outcome being "lost to
+    follow-up here". A subscriber who churned in period ``s`` contributes no row
+    for ``s``: churn preempted censoring, so they were never eligible to be
+    observed censored there. Including that row would understate the censoring
+    hazard, which is the same tie that biases the reverse Kaplan-Meier estimator
+    if it is ignored.
+    """
+    capped = np.minimum(panel.n_periods, horizon)
+    # Drop the final period for subscribers whose last observed period was a churn.
+    eligible = capped - (panel.event & (panel.n_periods <= horizon)).astype(np.int64)
+    eligible = np.maximum(eligible, 0)
+
+    rows = np.repeat(np.arange(panel.n_subjects), eligible)
+    starts = np.concatenate(([0], np.cumsum(eligible)[:-1]))
+    period = np.arange(int(eligible.sum())) - np.repeat(starts, eligible) + 1
+
+    censored = np.zeros(period.size, dtype=float)
+    ends = np.cumsum(eligible) - 1
+    lost = (~panel.event) & (panel.n_periods <= horizon) & (eligible > 0)
+    censored[ends[lost]] = 1.0
+    return rows, period.astype(np.int64), censored
+
+
+def conditional_censoring_survival(
+    panel: SubscriberPanel,
+    horizon: int,
+    covariates: list[str],
+) -> np.ndarray:
+    """``Gbar(s-1 | X_i)`` for every subscriber, shape ``(n_subjects, horizon)``.
+
+    Fits a discrete-time censoring hazard on the covariates and accumulates it.
+    Needed when subscribers are lost to follow-up for reasons related to their
+    own state, where a single marginal ``Gbar`` is the wrong weight for everyone.
+    """
+    from .logistic import design_matrix, fit_logistic
+
+    if panel.covariates is None:
+        raise PanelError("Panel carries no covariates; rebuild it with covariates=[...].")
+    missing = [c for c in covariates if c not in panel.covariates.columns]
+    if missing:
+        raise PanelError(f"Covariate(s) {missing} not in the panel's covariates.")
+
+    X, _, _ = design_matrix(panel.covariates[covariates])
+    rows, period, censored = censoring_person_period(panel, horizon)
+    if rows.size == 0 or censored.sum() == 0:
+        return np.ones((panel.n_subjects, horizon))
+
+    fit = fit_logistic(_time_design(period, horizon, X[rows]), censored)
+    hazard = _predict_hazard(fit, X, horizon)
+    survival = np.cumprod(1.0 - hazard, axis=1)
+    # Gbar(s-1 | X): probability of still being observable *entering* period s.
+    return np.concatenate((np.ones((panel.n_subjects, 1)), survival[:, :-1]), axis=1)
+
+
+def _time_design(period: np.ndarray, horizon: int, X_rows: np.ndarray) -> np.ndarray:
+    dummies = np.zeros((period.size, horizon))
+    dummies[np.arange(period.size), period - 1] = 1.0
+    return np.hstack([dummies, X_rows]) if X_rows.size else dummies
+
+
+def _predict_hazard(fit, X: np.ndarray, horizon: int) -> np.ndarray:
+    alpha = fit.coef[:horizon]
+    gamma = fit.coef[horizon:]
+    offset = X @ gamma if gamma.size else np.zeros(X.shape[0])
+    return 1.0 / (1.0 + np.exp(-(alpha[None, :] + offset[:, None])))

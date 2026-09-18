@@ -215,7 +215,7 @@ censored out ("what if nobody ever had a failed payment?"). That isn't identifie
 assuming the causes are independent, which for subscriptions they plainly aren't — the
 subscriber halfway out the door is the one who doesn't bother updating their card.
 
-### Randomization checks that run whether you ask or not
+### Diagnostics that run whether you ask or not
 
 ```python
 print(sl.check_randomization(panel, expected_ratio=0.5))
@@ -229,6 +229,21 @@ an ETL job that dropped a partition. The result still prints a tight interval.
 Baseline covariate balance is reported as standardized mean differences, not t-tests: with a
 large experiment a trivial imbalance is "significant", and with a small one a serious imbalance
 isn't. The standardized difference measures *how big* it is, which is the question.
+
+```python
+print(sl.check_censoring(panel, covariates=["plan", "tenure_bucket", "engagement"]))
+```
+
+Every estimator here assumes subscribers are censored because you cut the data, not because of
+anything they did. That assumption used to be untestable and is now checked: if the panel
+records potential follow-up it is settled by construction, and otherwise sublift fits the
+censoring hazard with and without your covariates and compares the fits.
+
+When it fires, the honest answer is that informative censoring is **detectable and partly
+correctable, not solvable**. `adjusted` with the offending covariate more than halves the bias
+(+0.0179 → +0.0077 on a true effect of +0.2587); `censoring_covariates=` adds a partial hedge
+when the outcome model is incomplete. Neither eliminates it, and the docs
+[say so with the numbers](docs/assumptions.md#2-censoring-is-administrative).
 
 ### Planning, before you start
 
@@ -341,6 +356,7 @@ each other — two independent routes to the same standard error.
 | `SubscriberPanel.from_spans` | dates in, billing periods out — **start here** |
 | `.from_periods` / `.from_subjects` | already have period counts |
 | `check_randomization` | SRM + baseline balance |
+| `check_censoring` | is censoring really administrative? |
 | `incremental_ltv` | the money question |
 | `retained_periods_lift` | the retention question |
 | `churn_decomposition` | voluntary vs involuntary |
@@ -361,7 +377,7 @@ What sublift assumes, stated rather than buried:
 
 - **Assignment is randomized.** No observational identification.
 - **Censoring is administrative** — you cut the data on a date. Dropout that depends on
-  subscriber state violates this.
+  subscriber state violates this; `check_censoring` tests it.
 - **Baseline covariates only.** Adjusting for anything measured after assignment reintroduces
   the bias randomization removed; the panel constructors reject it.
 - **Two arms** at a time.
@@ -369,8 +385,9 @@ What sublift assumes, stated rather than buried:
 Roadmap:
 
 - [x] Efficient influence function for `adjusted`, giving it a confidence sequence
-- [ ] Informative censoring via inverse-probability-of-censoring weights *(largest known gap)*
-- [ ] More than two arms, with multiple-comparison control across segments
+- [x] Informative censoring: detected by `check_censoring`, partly corrected by adjustment and
+      `censoring_covariates=`. Not solved — nothing solves it — and documented as such.
+- [ ] More than two arms, with multiple-comparison control across segments *(largest known gap)*
 - [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
 - [ ] Pauses, plan switches and win-backs in the panel and the simulator
 

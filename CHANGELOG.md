@@ -11,6 +11,23 @@ slipped into a patch release.
 ## [Unreleased]
 
 ### Added
+- **`check_censoring`.** The assumption that subscribers are censored because you cut the data,
+  rather than because of anything they did, was previously untestable and documented as
+  unchecked. It is now checked: if the panel records potential follow-up the question is settled
+  by construction, and otherwise sublift fits the censoring hazard with and without your
+  covariates and compares the fits. Reports which covariates drive censoring and what to do.
+- **`censoring_covariates=`** on `estimator="adjusted"`, reweighting the augmentation term per
+  subscriber instead of using one marginal censoring curve for everybody.
+- `dropout_hazard` and `dropout_depends_on_engagement` in `simulate_experiment`, so informative
+  censoring can be generated and any analysis checked for robustness to it.
+
+  On informative censoring, the measured finding is documented rather than oversold: it is
+  **detectable and partly correctable, not solvable**. Covariate adjustment more than halves the
+  bias when the offending covariate is in the model (+0.0179 → +0.0077 on a true effect of
+  +0.2587); inverse-probability-of-censoring weighting is a partial hedge for an incomplete
+  outcome model and buys nothing when the outcome model is already right. A contrast is also far
+  more forgiving than a level — on the same simulation the control arm's level is off by −0.15
+  periods while the contrast is off by +0.02.
 - **Efficient influence function for `estimator="adjusted"`.** The covariate-adjusted estimator
   is now a one-step (AIPW) estimator rather than plain g-computation, which makes it
   asymptotically linear with a known influence function. Consequences: standard errors without
