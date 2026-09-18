@@ -43,6 +43,11 @@ from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
 from .review import ExperimentReview, Finding, review
 from .segments import Heterogeneity, SegmentEffect, SegmentScan, segment_scan
+from .sensitivity import (
+    CensoringSensitivity,
+    SensitivityPoint,
+    censoring_sensitivity,
+)
 from .sequential import ConfidenceSequence, confidence_sequence
 from .survival import DiscreteSurvival, fit_survival, weighted_value
 from .uplift import QiniCurve, qini, uplift_scores
@@ -76,6 +81,9 @@ __all__ = [
     "check_randomization",
     "RandomizationCheck",
     "check_censoring",
+    "censoring_sensitivity",
+    "CensoringSensitivity",
+    "SensitivityPoint",
     "CensoringCheck",
     "LiftResult",
     "ArmSummary",

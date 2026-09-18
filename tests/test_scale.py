@@ -62,7 +62,7 @@ def test_the_influence_function_does_not_scale_with_the_horizon():
         ("stratified", 300),
         ("ltv", 320),
         ("decomposition", 250),
-        ("segments", 500),
+        ("segments", 350),
     ],
 )
 def test_a_million_subscribers_stays_within_budget(name, budget_mb):
@@ -89,6 +89,24 @@ def test_a_million_subscribers_stays_within_budget(name, budget_mb):
     peak, elapsed = peak_megabytes(calls[name])
     assert peak < budget_mb, f"{name}: {peak:.0f}MB exceeds the {budget_mb}MB budget"
     assert elapsed < 20, f"{name}: {elapsed:.1f}s at a million subscribers"
+
+
+@pytest.mark.slow
+def test_the_segment_scan_holds_one_influence_matrix_not_three():
+    """It held three: a list of rows, the vstack of them, and the differenced copy.
+
+    Two were removable outright -- fill in place, and expand the differenced
+    variance into terms already computed -- and a fourth, the control arm's
+    influence per segment, was dead weight left behind when the second
+    heterogeneity scale changed.
+    """
+    sim = simulate_experiment(n=1_000_000, seed=1, horizon=12, observation_window=18, price=12.0)
+    peak, _ = peak_megabytes(
+        lambda: segment_scan(sim.panel, by=["plan", "tenure_bucket", "engagement_bucket"], horizon=12)
+    )
+    # Eight segments over a million subscribers is 64MB of influence values; anything
+    # near a multiple of that means a copy came back.
+    assert peak < 200, f"{peak:.0f}MB suggests the influence matrix exists more than once"
 
 
 @pytest.mark.slow

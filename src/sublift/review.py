@@ -31,6 +31,7 @@ from .exceptions import PanelError, SubliftError
 from .occupancy import occupancy_lift
 from .panel import SubscriberPanel
 from .segments import SegmentScan, segment_scan
+from .sensitivity import CensoringSensitivity, censoring_sensitivity
 
 __all__ = ["review", "ExperimentReview", "Finding"]
 
@@ -56,6 +57,7 @@ class ExperimentReview:
     value: LiftResult | None = None
     decomposition: ChurnDecomposition | None = None
     segments: SegmentScan | None = None
+    sensitivity: CensoringSensitivity | None = None
     monitoring: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -157,6 +159,7 @@ def review(
     _margin(retention, value, findings)
     decomposition = _decomposition(panel, resolved, alpha, allow_extrapolation, findings)
     scan = _segments(panel, segments, resolved, alpha, allow_extrapolation, findings)
+    sensitivity = _fragility(panel, resolved, allow_extrapolation, findings)
     _monitoring(retention or value, monitoring, findings)
 
     return ExperimentReview(
@@ -168,6 +171,7 @@ def review(
         value=value,
         decomposition=decomposition,
         segments=scan,
+        sensitivity=sensitivity,
         monitoring=monitoring,
     )
 
@@ -366,6 +370,37 @@ def _segments(panel, segments, horizon, alpha, extrapolate, findings):
             )
         )
     return scan
+
+
+def _fragility(panel, horizon, extrapolate, findings):
+    """How far independent censoring has to fail before the answer changes.
+
+    Run without bootstrapping, which makes it cheap enough to do unasked. A
+    tipping point close to one means the conclusion rests on subscribers nobody
+    observed behaving like the ones who were.
+    """
+    if panel.n_arms > 2 or panel.has_spells:
+        return None
+    try:
+        result = censoring_sensitivity(panel, horizon=horizon, n_boot=0, allow_extrapolation=extrapolate)
+    except SubliftError:
+        return None
+
+    tipping = result.tipping_estimate
+    if tipping is not None and tipping >= 0.90:
+        findings.append(
+            Finding(
+                "warning",
+                f"Fragile to censoring: the estimate flips at gamma = {tipping:.2f}",
+                f"Censored subscribers would only have to stay {1 - tipping:.0%} less long than\n"
+                "otherwise-identical subscribers who were not censored -- for a reason no column\n"
+                "records -- for this effect to change sign. With "
+                + ", ".join(f"{k} {v:.0%}" for k, v in result.censoring_rate.items())
+                + " censored, that is\nnot a remote possibility. Treat the direction as the "
+                "finding and the magnitude as soft.",
+            )
+        )
+    return result
 
 
 def _monitoring(result, monitoring, findings):

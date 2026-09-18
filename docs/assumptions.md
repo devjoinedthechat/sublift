@@ -55,12 +55,43 @@ Two honest readings of that table:
   a cure**. It helps when the outcome model is incomplete, and it buys nothing when the outcome
   model is already right. It is available for that reason and no stronger one.
 
+### And when no column explains it
+
+`check_censoring` tests whether censoring depends on covariates you *recorded*. It cannot test
+the case that actually worries people: subscribers leaving the data for reasons related to how
+much longer they would have stayed, in a way nothing in your warehouse captures.
+
+Nothing can test that. The honest response to an untestable assumption is to say how badly it
+would have to fail before the conclusion changes:
+
+```python
+print(sl.censoring_sensitivity(panel, horizon=12))
+```
+
+```
+  Tipping point: gamma = 0.85. Censored treatment subscribers would have had to
+  stay 15% less long than otherwise-identical subscribers who were not censored,
+  for a reason no recorded column captures, before this result loses significance.
+```
+
+`gamma` scales the expected remaining tenure of censored subscribers in one arm. At `gamma = 1`
+the estimate is exactly the product-limit one — the imputation form of restricted mean survival
+time is not an approximation of it but the same number — so the sweep reads against your
+headline rather than near it.
+
+`review` runs this without bootstrapping on every experiment and warns when the tipping point is
+above 0.90, which means the conclusion rests on subscribers nobody observed behaving like the
+ones who were.
+
+Whether a 15% shortfall is plausible is a question about your data pipeline, not a statistical
+one. That is deliberately where it stops.
+
 ### The thing to take away
 
-Informative censoring is **detectable and partly correctable, not solvable**. No estimator here
-eliminates it. If `check_censoring` fires, the number is directional: treat a 3% effect as
-"probably positive", not as "+3.0%". The value of the check is that you know which kind of
-number you are holding.
+Informative censoring is **detectable, partly correctable, and boundable — not solvable**. No
+estimator here eliminates it. If `check_censoring` fires, the number is directional: treat a 3%
+effect as "probably positive", not as "+3.0%". The value of the checks is that you know which
+kind of number you are holding, and roughly how hard it would be to break.
 
 A contrast is also far more forgiving than a level, because the bias largely cancels between
 arms. On the same simulation the control arm's *level* is off by −0.15 periods while the

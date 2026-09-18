@@ -391,7 +391,14 @@ question. One million subscribers, twelve billing periods, on a laptop:
 | `retained_periods_lift` (adjusted) | 1.89s | 803 MB |
 | **`review`** (checks + both metrics + causes) | **1.89s** | **160 MB** |
 
-Getting there took three things worth naming, because each is the kind of cost that is invisible
+Ten times that — **ten million subscribers** — and everything is still under twenty seconds:
+`retained_periods_lift` 3.3s/0.5 GB, `segment_scan` 6.4s/1.1 GB, `review` 11.4s/0.7 GB. The
+algorithms are linear in subscribers, so a hundred million extrapolates to roughly half a minute
+and 5 GB for the core estimators — a server, not a laptop, and `segment_scan` is the binding
+constraint at around 11 GB because the covariance between segments needs their influence values
+side by side. Making that sparse is the next real optimization and has not been done.
+
+Getting there took four things worth naming, because each is the kind of cost that is invisible
 until someone runs it at scale:
 
 **The influence function forms no matrix at all.** Both of its terms collapse once you notice
@@ -409,6 +416,12 @@ and an arm indicator — so however many million person-periods a segment contai
 decomposition process subscribers in chunks, so peak memory is flat in the size of the base
 rather than proportional to it. The chunking is exact — identical to twelve decimal places at
 chunk sizes of 7, 100,000, and unbounded.
+
+**And some of it was dead.** `segment_scan` kept one full-length array per segment holding the
+control arm's influence function — left behind when the second heterogeneity scale changed from
+the proportional effect to the churn odds ratio, and read by nothing since. Deleting it took
+1.78 GB to 1.13 GB at ten million subscribers. Profiling found that; reasoning about the code
+had not.
 
 `tests/test_scale.py` asserts these budgets, because reintroducing an `(n, horizon)` temporary in
 a hot path is easy and no correctness test would catch it.
@@ -520,6 +533,7 @@ each other — two independent routes to the same standard error.
 | `.from_periods` / `.from_subjects` | already have period counts |
 | `check_randomization` | SRM + baseline balance |
 | `check_censoring` | is censoring really administrative? |
+| `censoring_sensitivity` | how wrong that would have to be to change the answer |
 | `incremental_ltv` | the money question |
 | `retained_periods_lift` | the retention question |
 | `occupancy_lift` | periods paid for, when subscribers return |
@@ -563,9 +577,11 @@ Roadmap:
 - [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
 - [x] Win-backs and pauses (`from_spells`, `occupancy_lift`)
 - [x] Covariate-adjusted occupancy, and competing risks beyond the first spell
-- [ ] Informative censoring beyond covariate adjustment *(largest known gap — see
-      [assumptions](docs/assumptions.md))*
-- [ ] Multiplicity across horizons, and sequential monitoring of a whole family at once
+- [x] Informative censoring: bounded by `censoring_sensitivity` rather than pretended away
+- [ ] A sparse influence matrix for `segment_scan`, the binding memory constraint above ~50M
+      subscribers
+- [ ] Sequential monitoring of a whole family at once with max-t rather than Bonferroni
+      calibration
 
 ## Documentation
 

@@ -328,7 +328,7 @@ def segment_scan(
     notes: list[str] = []
     n = panel.n_subjects
 
-    overall_value, overall_psi, _, _ = _contrast(
+    overall_value, overall_psi, _ = _contrast(
         panel, np.ones(n, dtype=bool), horizon, weights, allow_extrapolation
     )
 
@@ -337,18 +337,15 @@ def segment_scan(
     # holds the whole influence matrix twice, which at ten million subscribers is a
     # gigabyte spent on a copy.
     psi = np.empty((len(definitions), n))
-    rows, control_rows = [], []
+    rows = []
     for dimension, label, mask in definitions:
         sizes = [int((mask & (panel.arm == a)).sum()) for a in (0, 1)]
         if min(sizes) < min_per_arm:
             notes.append(f"{dimension}={label} dropped: {sizes[0]} control / {sizes[1]} treatment")
             continue
-        value, influence, control_value, control_psi = _contrast(
-            panel, mask, horizon, weights, allow_extrapolation
-        )
+        value, influence, control_value = _contrast(panel, mask, horizon, weights, allow_extrapolation)
         psi[len(rows)] = influence
         rows.append((dimension, label, mask, sizes, value, control_value))
-        control_rows.append((control_value, control_psi))
 
     if not rows:
         raise NotIdentifiedError(
@@ -452,27 +449,24 @@ def _definitions(panel, by, cross):
 
 
 def _contrast(panel, mask, horizon, weights, allow_extrapolation):
-    """Effect inside ``mask``, with influence functions on the whole-sample scale.
+    """Effect inside ``mask``, its influence function, and the control arm's value.
 
-    Returns the contrast, its influence function, the control arm's own value and
-    the control arm's influence function -- the last two so the proportional
-    effect can be given a delta-method interval rather than being read off the
-    absolute one.
+    The control arm's own influence function is deliberately not returned. It was,
+    when the second heterogeneity scale was the proportional effect and needed a
+    delta-method interval; that scale is now the churn odds ratio, which is fitted
+    separately, and keeping one full-length array per segment for nothing is a
+    gigabyte at ten million subscribers.
     """
     n = panel.n_subjects
     share = mask.sum() / n
     values, psi = {}, np.zeros(n)
-    control_psi = np.zeros(n)
     for a in (0, 1):
         arm_mask = mask & (panel.arm == a)
         _, value, inf, _ = _fit_arm(panel, arm_mask, horizon, weights[a], allow_extrapolation)
         values[a] = value
         conditional = arm_mask.sum() / mask.sum()
-        scaled = inf / (share * conditional)
-        psi[arm_mask] = (1 if a == 1 else -1) * scaled
-        if a == 0:
-            control_psi[arm_mask] = scaled
-    return values[1] - values[0], psi, values[0], control_psi
+        psi[arm_mask] = (1 if a == 1 else -1) * inf / (share * conditional)
+    return values[1] - values[0], psi, values[0]
 
 
 def _heterogeneity(segments: list[SegmentEffect]) -> list[Heterogeneity]:

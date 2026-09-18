@@ -11,6 +11,24 @@ slipped into a patch release.
 ## [Unreleased]
 
 ### Added
+- **`censoring_sensitivity`**: how badly independent censoring would have to fail before the
+  conclusion changes. `check_censoring` tests dependence on covariates you recorded; nothing can
+  test the case where subscribers leave for reasons related to how much longer they would have
+  stayed, in a way no column captures. So instead of looking for a better estimator, this bounds
+  it — "censored treatment subscribers would have had to stay 15% less long than their observed
+  peers before this result loses significance" — and hands the plausibility question back, which
+  is where it belongs.
+
+  It rests on writing restricted mean survival time as an imputation, `observed + expected
+  remaining`. That is not an approximation of the product-limit estimate but the same number to
+  machine precision, which is what lets the sweep be read against the headline. The identity
+  needs the right conditioning: the panel's convention puts a censored subscriber *through* that
+  period's renewal decision, so remaining tenure conditions on `S(c)`, not `S(c-1)`.
+
+  `review` runs it unbootstrapped on every experiment and warns when the tipping point is above
+  0.90.
+
+### Added
 - **`correct_family`**: correct across any set of results that expose an influence function.
   `multi_arm_lift` handles arms and `segment_scan` handles segments, but only the analyst knows
   what they actually looked at — three arms over four segments is twelve comparisons, not three
