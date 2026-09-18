@@ -11,6 +11,28 @@ slipped into a patch release.
 ## [Unreleased]
 
 ### Added
+- **`segment_scan`: effects by segment, without the slice becoming the finding.** "It didn't
+  work overall, but it worked great for annual subscribers on iOS" is the most common way a
+  retention experiment produces a false result. On a **null** experiment sliced eight ways,
+  per-comparison tests report a segment that "differs" 26.4% of the time; `segment_scan` reports
+  one 5.2% of the time, against a nominal 5%.
+
+  It asks three questions in order: is there real variation at all (Cochran's Q per dimension,
+  Holm-corrected across dimensions), does the effect differ from zero in this segment
+  (simultaneous intervals, calibrated against the correlation between overlapping segments), and
+  does it differ from the *pooled* effect — the claim a segment story actually makes, which
+  carries its own wider uncertainty.
+
+- **A scale-artefact diagnostic**, which came out of building the above. A *uniform* odds ratio
+  produces genuinely different numbers of retained periods per segment, because segments
+  churning faster have more to save and the map from hazard to retained periods is not linear.
+  Cochran's Q detects that variation reliably at large samples — correctly, it is real — and it
+  is almost always misread as "the offer works better for these people".
+
+  So heterogeneity is now tested on two scales: retained periods, which is what the business
+  banks, and the per-period churn odds ratio, which is what the treatment does. Variation in the
+  first with none in the second sets `scan.scale_artefact` and is reported as such. The
+  targeting implication survives; the mechanism story does not.
 - **`multi_arm_lift`: several treatment arms against one control, with family-wise error
   control.** Testing three save offers against a holdout and reporting whichever looked best is
   one experiment with three chances to be wrong: with four arms and no real effect, declaring at

@@ -98,9 +98,12 @@ measured. Use [`multi_arm_lift`](multi-arm.md), which controls the family-wise r
 **Checked:** yes. The two-arm estimators refuse to run on a multi-arm panel and point at
 `multi_arm_lift` or `panel.contrast()`.
 
-What is **not** checked is multiplicity across *metrics, segments and horizons*. Testing one arm
-on twelve metrics has the same problem and sublift does not track it. Fix the primary metric and
-horizon before you look.
+Slicing into segments is the same problem again, and [`segment_scan`](segments.md) handles it:
+per-comparison tests on a null experiment sliced eight ways report a finding 26.4% of the time.
+
+What is **not** checked is multiplicity across *metrics and horizons*, or arms and segments
+together. Testing one arm on twelve metrics has the same problem and sublift does not track it.
+Fix the primary metric and horizon before you look.
 
 ## 7. For `adjusted` specifically
 

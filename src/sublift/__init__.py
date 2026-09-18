@@ -34,6 +34,7 @@ from .exceptions import EstimationError, NotIdentifiedError, PanelError, Sublift
 from .multiarm import ArmContrast, MultiArmResult, multi_arm_lift
 from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
+from .segments import Heterogeneity, SegmentEffect, SegmentScan, segment_scan
 from .sequential import ConfidenceSequence, confidence_sequence
 from .survival import DiscreteSurvival, fit_survival, weighted_value
 from .uplift import QiniCurve, qini, uplift_scores
@@ -44,6 +45,10 @@ __all__ = [
     "SubscriberPanel",
     "incremental_ltv",
     "retained_periods_lift",
+    "segment_scan",
+    "SegmentScan",
+    "SegmentEffect",
+    "Heterogeneity",
     "multi_arm_lift",
     "MultiArmResult",
     "ArmContrast",

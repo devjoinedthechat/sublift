@@ -18,6 +18,7 @@ from sublift import (
     churn_decomposition,
     multi_arm_lift,
     retained_periods_lift,
+    segment_scan,
     simulate_experiment,
     simulate_multi_arm,
 )
@@ -467,3 +468,65 @@ def test_simultaneous_intervals_cover_every_arm_at_once():
         all_covered += all(c.ci[0] <= sim.true_arm_lift[c.label] <= c.ci[1] for c in res.contrasts)
     coverage = all_covered / reps
     assert 0.92 <= coverage <= 1.0, f"simultaneous coverage {coverage:.1%}"
+
+
+# -------------------------------------------------------------------- segments
+
+_SEGMENT_BY = ["plan", "tenure_bucket", "engagement_bucket"]
+
+
+def test_segment_scanning_does_not_manufacture_findings():
+    """A true null, sliced eight ways, 250 times.
+
+    Compared against the thing people actually do: eyeball each segment's
+    difference from the average with a per-comparison test and no heterogeneity
+    gate.
+    """
+    reps = 250
+    naive = gated = 0
+    for r in range(reps):
+        sim = simulate_experiment(
+            n=30_000,
+            horizon=8,
+            observation_window=12,
+            seed=80_000 + r,
+            treatment_odds_ratio=1.0,
+        )
+        scan = segment_scan(sim.panel, by=_SEGMENT_BY, horizon=8)
+        naive += any(abs(s.interaction) / s.interaction_se > 1.96 for s in scan.segments)
+        gated += len(scan.credible_segments()) > 0
+
+    assert naive / reps > 0.15, f"naive practice should fail visibly, saw {naive / reps:.1%}"
+    assert gated / reps <= 0.09, f"sublift reported a segment {gated / reps:.1%} of the time"
+
+
+def test_a_uniform_odds_ratio_is_labelled_a_scale_artefact():
+    """Non-collapsibility, and the diagnostic that keeps it from being a mechanism story.
+
+    One odds ratio for everybody genuinely produces different numbers of retained
+    periods per segment, because segments churning faster have more to save. The
+    scan should find that variation and then say it is not evidence the treatment
+    behaves differently.
+    """
+    sim = simulate_experiment(n=250_000, horizon=8, observation_window=12, seed=3, treatment_odds_ratio=0.80)
+    scan = segment_scan(sim.panel, by=_SEGMENT_BY, horizon=8)
+    assert scan.any_heterogeneity, "the absolute variation is real and should be found"
+    assert not scan.mechanism_heterogeneity, "there is no variation in the odds ratio"
+    assert scan.scale_artefact
+
+
+def test_genuine_effect_modification_is_not_dismissed_as_one():
+    """The other side of the same test: real heterogeneity must survive the filter."""
+    sim = simulate_experiment(
+        n=250_000,
+        horizon=8,
+        observation_window=12,
+        seed=3,
+        treatment_odds_ratio=0.88,
+        effect_modification=1.8,
+    )
+    scan = segment_scan(sim.panel, by=_SEGMENT_BY, horizon=8)
+    assert scan.mechanism_heterogeneity
+    assert not scan.scale_artefact
+    names = {s.name for s in scan.credible_segments()}
+    assert {"engagement_bucket=high", "engagement_bucket=low"} <= names

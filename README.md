@@ -175,6 +175,28 @@ critical value, so 2–6% fewer subscribers for the same power.
 arm always has the largest point estimate. The two-arm estimators refuse to run on a multi-arm
 panel, so this is hard to do by accident. [More](docs/multi-arm.md).
 
+### Slicing the base, honestly
+
+```python
+scan = sl.segment_scan(panel, by=["plan", "tenure_bucket", "engagement_bucket"], horizon=12)
+scan.credible_segments()
+```
+
+"It didn't work overall, but it worked great for annual subscribers on iOS" is the most common
+way a retention experiment produces a false finding. Slice a **null** experiment eight ways and
+per-comparison tests report a segment that "differs" **26.4%** of the time; `segment_scan`
+reports one 5.2% of the time, against a nominal 5%.
+
+It asks the questions in order: is there any real variation (Cochran's Q, Holm-corrected across
+dimensions), does it work here (simultaneous intervals), and does it work *differently* here —
+the claim a segment story actually makes, which has its own wider uncertainty.
+
+It also catches a trap that is easy to miss. A **uniform** odds ratio produces genuinely
+different numbers of retained periods per segment, because segments churning faster have more to
+save. So heterogeneity is tested on two scales — retained periods and the churn odds ratio — and
+variation in the first with none in the second is reported as a scale artefact, not a mechanism.
+[More](docs/segments.md).
+
 ### Censoring you know rather than estimate
 
 Under administrative censoring, a subscriber's potential follow-up is fixed the day they enter
@@ -381,6 +403,7 @@ each other — two independent routes to the same standard error.
 | `retained_periods_lift` | the retention question |
 | `churn_decomposition` | voluntary vs involuntary |
 | `multi_arm_lift` | many arms vs one control, family-wise error control |
+| `segment_scan` | effects by segment, without manufacturing findings |
 | `SubscriberPanel.contrast` | pull one comparison out of a multi-arm panel |
 | `LiftResult.confidence_sequence` | anytime-valid interval |
 | `LiftResult.relative_ci` | interval for the % lift (delta method, not `ci / control`) |
@@ -410,7 +433,8 @@ Roadmap:
 - [x] Informative censoring: detected by `check_censoring`, partly corrected by adjustment and
       `censoring_covariates=`. Not solved — nothing solves it — and documented as such.
 - [x] More than two arms, with family-wise error control (`multi_arm_lift`)
-- [ ] Multiple-comparison control across *metrics and segments*, not just arms *(largest known gap)*
+- [x] Multiplicity across segments (`segment_scan`), with a scale-artefact diagnostic
+- [ ] Multiplicity across *metrics*, and across arms × segments together *(largest known gap)*
 - [ ] All-pairs comparisons; today every contrast is against the control
 - [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
 - [ ] Pauses, plan switches and win-backs in the panel and the simulator
@@ -423,6 +447,7 @@ Roadmap:
 | [Choosing an estimator](docs/choosing-an-estimator.md) | Which of the three, and why |
 | [Monitoring a running test](docs/monitoring.md) | Why peeking breaks a p-value |
 | [Testing several arms](docs/multi-arm.md) | Many offers, one holdout, one error rate |
+| [Slicing the base](docs/segments.md) | Segment scans that don't manufacture findings |
 | [Voluntary vs involuntary churn](docs/competing-risks.md) | Competing risks, and why the split is exact |
 | [Assumptions](docs/assumptions.md) | When sublift is wrong — read this one |
 | [Method](docs/method.md) | The estimand, the influence functions, the references |

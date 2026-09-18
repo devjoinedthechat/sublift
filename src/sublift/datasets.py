@@ -283,9 +283,14 @@ def _covariates(rng, n: int, enabled: bool, strength: float):
     # Engaged, annual and long-tenured subscribers churn less. Signs matter: if the
     # covariates carried no real signal, adjustment would have nothing to remove.
     gamma = strength * np.array([-0.55, -0.70, -0.35])
+    # Engagement is also exposed as a tercile, because that is how growth teams
+    # actually slice: nobody segments on a z-score.
+    cuts = np.quantile(engagement, [1 / 3, 2 / 3])
+    bucket = np.digitize(engagement, cuts)
     frame = pd.DataFrame(
         {
             "engagement": engagement,
+            "engagement_bucket": pd.Categorical.from_codes(bucket, ["low", "mid", "high"]),
             "plan": np.where(annual > 0, "annual", "monthly"),
             "tenure_bucket": pd.Categorical.from_codes(tenure.astype(int), ["new", "established", "long"]),
         }

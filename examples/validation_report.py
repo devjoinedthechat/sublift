@@ -205,8 +205,48 @@ for correction in corrections:
     print(f"   {correction:<14s} {false_families[correction] / reps_ma:>17.1%}")
 print("   (nominal 5%; uncorrected sits below 18.5% because the contrasts share a control)")
 
+# ------------------------------------------------------------------- segments
+rule("7. Segment scans: does slicing a null experiment manufacture findings?")
+SEGMENT_BY = ["plan", "tenure_bucket", "engagement_bucket"]
+reps_seg = 200
+naive_seg = gated_seg = 0
+for r in range(reps_seg):
+    sim = sl.simulate_experiment(
+        n=30_000,
+        horizon=HORIZON,
+        observation_window=12,
+        seed=80_000 + r,
+        treatment_odds_ratio=1.0,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        scan = sl.segment_scan(sim.panel, by=SEGMENT_BY, horizon=HORIZON)
+    naive_seg += any(abs(s.interaction) / s.interaction_se > 1.96 for s in scan.segments)
+    gated_seg += len(scan.credible_segments()) > 0
+
+print("   True null, 8 segments scanned. P(the analysis reports a segment that differs):")
+print(f"     per-comparison tests, no gate   {naive_seg / reps_seg:6.1%}")
+print(f"     segment_scan                    {gated_seg / reps_seg:6.1%}")
+print("   (nominal 5%)")
+
+print()
+print("   And the scale artefact -- a uniform odds ratio, which is not a uniform effect:")
+for label, kw in (
+    ("uniform odds ratio", {"treatment_odds_ratio": 0.80}),
+    ("real effect modification", {"treatment_odds_ratio": 0.88, "effect_modification": 1.8}),
+):
+    sim = sl.simulate_experiment(n=250_000, horizon=HORIZON, observation_window=12, seed=3, **kw)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        scan = sl.segment_scan(sim.panel, by=SEGMENT_BY, horizon=HORIZON)
+    print(
+        f"     {label:<26s} periods vary: {str(scan.any_heterogeneity):<5s} "
+        f"odds ratio varies: {str(scan.mechanism_heterogeneity):<5s} "
+        f"-> {'scale artefact' if scan.scale_artefact else 'real mechanism'}"
+    )
+
 # -------------------------------------------------------------------- uplift
-rule("7. Uplift: why the default learner is not a T-learner")
+rule("8. Uplift: why the default learner is not a T-learner")
 print(f"   {'regime':<32s} {'T-learner':>10s} {'pooled+shrunk':>14s}")
 covs = ["engagement", "plan", "tenure_bucket"]
 for em, label in ((0.0, "constant odds ratio"), (1.5, "strong effect modification")):
