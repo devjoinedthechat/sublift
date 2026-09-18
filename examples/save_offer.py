@@ -23,13 +23,13 @@ sim = sl.simulate_experiment(
     horizon=HORIZON,
     observation_window=18,
     baseline_hazard=0.065,
-    renewal_spike={12: 1.8},     # the annual renewal cliff
-    treatment_odds_ratio=0.86,   # the offer genuinely reduces churn
-    effect_decay=0.10,           # and the effect fades once the discount ends
+    renewal_spike={12: 1.8},  # the annual renewal cliff
+    treatment_odds_ratio=0.86,  # the offer genuinely reduces churn
+    effect_decay=0.10,  # and the effect fades once the discount ends
     price=PRICE,
     treatment_discount=0.50,
     discount_periods=DISCOUNT_PERIODS,
-    involuntary_hazard=0.015,    # some subscribers leave because their card failed
+    involuntary_hazard=0.015,  # some subscribers leave because their card failed
     seed=2024,
 )
 panel = sim.panel
@@ -57,12 +57,16 @@ print("\n" + "=" * 78 + "\n")
 # at-risk populations are no longer comparable.
 schedule = {
     "control": np.full(HORIZON, PRICE),
-    "treatment": np.concatenate([np.full(DISCOUNT_PERIODS, PRICE * 0.5),
-                                 np.full(HORIZON - DISCOUNT_PERIODS, PRICE)]),
+    "treatment": np.concatenate(
+        [np.full(DISCOUNT_PERIODS, PRICE * 0.5), np.full(HORIZON - DISCOUNT_PERIODS, PRICE)]
+    ),
 }
 ltv = sl.incremental_ltv(
-    panel, horizon=HORIZON, estimator="stratified",
-    strata=["plan", "tenure_bucket"], price=schedule,
+    panel,
+    horizon=HORIZON,
+    estimator="stratified",
+    strata=["plan", "tenure_bucket"],
+    price=schedule,
 )
 print(ltv)
 print("\n" + "=" * 78 + "\n")
@@ -82,7 +86,11 @@ print("\n" + "=" * 78 + "\n")
 
 # --- 4. is it worth it for *everyone*? --------------------------------------
 curve = sl.qini(
-    panel, horizon=HORIZON, covariates=["engagement", "plan", "tenure_bucket"],
-    metric="ltv", price=schedule, fractions=np.arange(0.2, 1.01, 0.2),
+    panel,
+    horizon=HORIZON,
+    covariates=["engagement", "plan", "tenure_bucket"],
+    metric="ltv",
+    price=schedule,
+    fractions=np.arange(0.2, 1.01, 0.2),
 )
 print(curve)

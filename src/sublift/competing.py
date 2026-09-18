@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from .exceptions import NotIdentifiedError, PanelError
 from .panel import SubscriberPanel
 from .survival import fit_survival
 
@@ -121,6 +122,11 @@ class ChurnDecomposition:
     def __str__(self) -> str:
         return self.summary()
 
+    def _repr_html_(self) -> str:
+        from .report import html_decomposition
+
+        return html_decomposition(self)
+
 
 def churn_decomposition(
     panel: SubscriberPanel,
@@ -136,13 +142,13 @@ def churn_decomposition(
     identical to :func:`retained_periods_lift` at the same horizon.
     """
     if panel.cause is None:
-        raise ValueError(
+        raise PanelError(
             "This panel has no cause of churn. Rebuild it with cause='<column>' -- typically a "
             "column distinguishing voluntary cancellation from involuntary/payment churn."
         )
     horizon = int(horizon) if horizon is not None else panel.followup
     if horizon > panel.followup and not allow_extrapolation:
-        raise ValueError(
+        raise NotIdentifiedError(
             f"horizon={horizon} exceeds the {panel.followup} periods of follow-up both arms have."
         )
 
@@ -151,8 +157,12 @@ def churn_decomposition(
     for a in (0, 1):
         mask = panel.arm == a
         per_arm[a] = _arm_decomposition(
-            panel.n_periods[mask], panel.event[mask], panel.cause[mask],
-            horizon, n_causes, allow_extrapolation,
+            panel.n_periods[mask],
+            panel.event[mask],
+            panel.cause[mask],
+            horizon,
+            n_causes,
+            allow_extrapolation,
         )
 
     n = panel.n_subjects
@@ -244,9 +254,7 @@ def _arm_decomposition(n_periods, event, cause, horizon, n_causes, allow_extrapo
         lost[j] = float(np.sum(g * s_lag * haz_j))
 
         term_survival = -(g * haz_j * s_lag)[None, :] * C_lag
-        term_hazard = (g * s_lag * inv_pi)[None, :] * (
-            churn_ij.astype(float) - at_risk_i * haz_j[None, :]
-        )
+        term_hazard = (g * s_lag * inv_pi)[None, :] * (churn_ij.astype(float) - at_risk_i * haz_j[None, :])
         influence[j] = (term_survival + term_hazard).sum(axis=1)
 
     return {"lost": lost, "influence": influence, "survival": surv}

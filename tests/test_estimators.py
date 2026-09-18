@@ -40,7 +40,9 @@ def test_arm_specific_price_captures_a_discount(sim):
     """A save offer priced into the treatment arm must reduce measured LTV."""
     flat = incremental_ltv(sim.panel, horizon=8, estimator="unadjusted", price=10.0)
     discounted = incremental_ltv(
-        sim.panel, horizon=8, estimator="unadjusted",
+        sim.panel,
+        horizon=8,
+        estimator="unadjusted",
         price={"control": 10.0, "treatment": np.array([5.0] * 3 + [10.0] * 5)},
     )
     assert discounted.estimate < flat.estimate
@@ -52,8 +54,14 @@ def test_stratifying_on_a_constant_reproduces_the_unadjusted_estimate():
     from sublift import SubscriberPanel
 
     panel = SubscriberPanel.from_periods(
-        frame, subject="subscriber_id", period="billing_period", churned="churned",
-        arm="variant", control="control", covariates=["everyone"], revenue="revenue",
+        frame,
+        subject="subscriber_id",
+        period="billing_period",
+        churned="churned",
+        arm="variant",
+        control="control",
+        covariates=["everyone"],
+        revenue="revenue",
     )
     plain = retained_periods_lift(panel, horizon=6, estimator="unadjusted")
     strat = retained_periods_lift(panel, horizon=6, estimator="stratified", strata=["everyone"])
@@ -76,20 +84,43 @@ def test_ltv_without_revenue_or_price_is_an_error():
     from sublift import SubscriberPanel
 
     bare = SubscriberPanel.from_periods(
-        s.frame, subject="subscriber_id", period="billing_period",
-        churned="churned", arm="variant", control="control",
+        s.frame,
+        subject="subscriber_id",
+        period="billing_period",
+        churned="churned",
+        arm="variant",
+        control="control",
     )
     with pytest.raises(ValueError, match="price="):
         incremental_ltv(bare, horizon=6, estimator="unadjusted")
 
 
-def test_adjusted_has_no_confidence_sequence_and_says_why(sim):
+def test_adjusted_reports_influence_based_inference_by_default(sim):
+    res = retained_periods_lift(sim.panel, horizon=6, estimator="adjusted", covariates=["engagement", "plan"])
+    assert res.inference == "influence"
+    assert res.confidence_sequence().radius > 0
+
+
+def test_adjusted_can_still_be_bootstrapped(sim):
+    """Kept as an escape hatch: no asymptotics, at the cost of no confidence sequence."""
     res = retained_periods_lift(
-        sim.panel, horizon=6, estimator="adjusted", covariates=["engagement", "plan"], n_boot=15
+        sim.panel,
+        horizon=6,
+        estimator="adjusted",
+        covariates=["engagement", "plan"],
+        inference="bootstrap",
+        n_boot=15,
     )
     assert res.inference == "bootstrap"
     with pytest.raises(ValueError, match="stratified"):
         res.confidence_sequence()
+
+
+def test_small_samples_are_warned_about(sim):
+    """The one-step estimator's variance is first-order; say so rather than run narrow."""
+    small = sim.panel.subset(np.arange(sim.panel.n_subjects) < 1500)
+    with pytest.warns(UserWarning, match="large-sample approximation"):
+        retained_periods_lift(small, horizon=6, estimator="adjusted", covariates=["engagement", "plan"])
 
 
 def test_curves_are_monotone_and_cover_the_horizon(sim):
@@ -116,8 +147,13 @@ def test_tiny_strata_are_dropped_and_reported():
     from sublift import SubscriberPanel
 
     panel = SubscriberPanel.from_periods(
-        frame, subject="subscriber_id", period="billing_period", churned="churned",
-        arm="variant", control="control", covariates=["bucket"],
+        frame,
+        subject="subscriber_id",
+        period="billing_period",
+        churned="churned",
+        arm="variant",
+        control="control",
+        covariates=["bucket"],
     )
     res = retained_periods_lift(panel, horizon=6, estimator="stratified", strata=["bucket"])
     assert any("dropped" in n for n in res.notes)

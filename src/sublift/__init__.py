@@ -25,6 +25,7 @@ from .competing import CauseEffect, ChurnDecomposition, churn_decomposition
 from .datasets import SimulatedExperiment, simulate_experiment
 from .diagnostics import RandomizationCheck, check_randomization
 from .estimators import ArmSummary, LiftResult, incremental_ltv, retained_periods_lift
+from .exceptions import EstimationError, NotIdentifiedError, PanelError, SubliftError
 from .panel import SubscriberPanel
 from .power import PowerCurve, duration_to_detect
 from .sequential import ConfidenceSequence, confidence_sequence
@@ -53,6 +54,10 @@ __all__ = [
     "uplift_scores",
     "simulate_experiment",
     "SimulatedExperiment",
+    "SubliftError",
+    "PanelError",
+    "NotIdentifiedError",
+    "EstimationError",
     "fit_survival",
     "weighted_value",
     "DiscreteSurvival",

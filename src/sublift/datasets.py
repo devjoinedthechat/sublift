@@ -155,7 +155,9 @@ def simulate_experiment(
 
     weights = _price_schedule(price, treatment_discount, discount_periods, observation_window)
     observed_cause = np.where(event, cause, -1)
-    frame = _to_frame(arm, n_periods, event, cov_frame, weights, observed_cause, involuntary_hazard > 0)
+    frame = _to_frame(
+        arm, n_periods, event, cov_frame, weights, observed_cause, involuntary_hazard > 0, censor
+    )
 
     panel = SubscriberPanel.from_periods(
         frame,
@@ -167,11 +169,21 @@ def simulate_experiment(
         covariates=list(cov_frame.columns) if cov_frame is not None else None,
         revenue="revenue",
         cause="churn_reason" if involuntary_hazard > 0 else None,
+        potential_followup="potential_followup",
     )
 
     truth = _truth(
-        rng, alpha, beta, gamma, horizon, weights, with_covariates, covariate_strength, X,
-        effect_modification, involuntary_hazard,
+        rng,
+        alpha,
+        beta,
+        gamma,
+        horizon,
+        weights,
+        with_covariates,
+        covariate_strength,
+        X,
+        effect_modification,
+        involuntary_hazard,
     )
     return SimulatedExperiment(
         panel=panel,
@@ -280,7 +292,9 @@ def _censoring(rng, n: int, window: int, staggered: bool) -> np.ndarray:
     return enrolled_ago.astype(np.int64)
 
 
-def _price_schedule(price: float, discount: float, discount_periods: int, periods: int) -> dict[str, np.ndarray]:
+def _price_schedule(
+    price: float, discount: float, discount_periods: int, periods: int
+) -> dict[str, np.ndarray]:
     control = np.full(periods, float(price))
     treatment = control.copy()
     if discount > 0:
@@ -288,7 +302,9 @@ def _price_schedule(price: float, discount: float, discount_periods: int, period
     return {"control": control, "treatment": treatment}
 
 
-def _to_frame(arm, n_periods, event, cov_frame, weights, cause=None, with_cause=False) -> pd.DataFrame:
+def _to_frame(
+    arm, n_periods, event, cov_frame, weights, cause=None, with_cause=False, potential=None
+) -> pd.DataFrame:
     n = arm.size
     labels = np.where(arm == 1, "treatment", "control")
     rows = np.repeat(np.arange(n), n_periods)
@@ -309,6 +325,10 @@ def _to_frame(arm, n_periods, event, cov_frame, weights, cause=None, with_cause=
         "revenue": revenue,
     }
     frame = pd.DataFrame(data)
+    if potential is not None:
+        # Administrative censoring: how long each subscriber *could* have been observed,
+        # fixed by their enrollment date. Known for everyone, churned or not.
+        frame["potential_followup"] = potential[rows]
     if with_cause:
         labels = np.array(["involuntary", "voluntary"])
         reason = np.where(cause >= 0, labels[np.clip(cause, 0, 1)], None)
@@ -323,14 +343,24 @@ def _to_frame(arm, n_periods, event, cov_frame, weights, cause=None, with_cause=
 # -------------------------------------------------------------------- truth
 
 
-def _truth(rng, alpha, beta, gamma, horizon, weights, with_covariates, strength, X_realized, em=0.0, involuntary=0.0):
+def _truth(
+    rng, alpha, beta, gamma, horizon, weights, with_covariates, strength, X_realized, em=0.0, involuntary=0.0
+):
     """The estimand, computed from the generating model rather than from a sample.
 
     Averaged over a large independent draw of covariates, so the target is the
     super-population effect an experiment is trying to estimate -- not the
     particular realized sample, which would flatter the coverage numbers.
     """
-    key = (alpha[:horizon].tobytes(), beta[:horizon].tobytes(), horizon, bool(with_covariates), float(strength), float(em), float(involuntary))
+    key = (
+        alpha[:horizon].tobytes(),
+        beta[:horizon].tobytes(),
+        horizon,
+        bool(with_covariates),
+        float(strength),
+        float(em),
+        float(involuntary),
+    )
     if key in _CURVE_CACHE:
         curves, lost = _CURVE_CACHE[key], _LOST_CACHE[key]
     else:
@@ -381,9 +411,7 @@ def _truth(rng, alpha, beta, gamma, horizon, weights, with_covariates, strength,
 
     saved = None
     if lost:
-        saved = {
-            cause: -(lost["treatment"][cause] - lost["control"][cause]) for cause in lost["control"]
-        }
+        saved = {cause: -(lost["treatment"][cause] - lost["control"][cause]) for cause in lost["control"]}
 
     return {
         "true_rmst_lift": rmst_lift,

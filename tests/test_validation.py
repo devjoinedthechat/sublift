@@ -67,17 +67,57 @@ def test_intervals_cover_at_their_nominal_rate(name):
     assert 0.92 <= coverage <= 0.98, f"{name}: {coverage:.1%} coverage over {reps} replications"
 
 
-def test_adjusted_bootstrap_intervals_cover():
-    """Separate, and smaller, because every replication refits 120 bootstrap models."""
-    reps = 60
+def test_adjusted_influence_intervals_cover():
+    """The one-step estimator, at a sample size where its asymptotics hold.
+
+    Its influence function is first-order, so coverage is a large-sample promise:
+    about 93% at 4,000 subscribers, nominal by around 16,000. The estimator warns
+    below 5,000 rather than quietly running narrow, and this test checks the
+    promise where it is actually made.
+    """
+    reps = 150
     covered = 0
-    for sim in _replicate(reps, 3000, seed0=33_000):
+    for sim in _replicate(reps, 16_000, seed0=33_000):
         res = retained_periods_lift(
-            sim.panel, horizon=8, estimator="adjusted",
-            covariates=["engagement", "plan", "tenure_bucket"], n_boot=120,
+            sim.panel,
+            horizon=8,
+            estimator="adjusted",
+            covariates=["engagement", "plan", "tenure_bucket"],
         )
         covered += res.ci[0] <= sim.true_rmst_lift <= res.ci[1]
-    assert 0.85 <= covered / reps <= 1.0, f"adjusted: {covered / reps:.1%} over {reps} replications"
+    assert 0.90 <= covered / reps <= 0.99, f"adjusted: {covered / reps:.1%} over {reps} replications"
+
+
+def test_adjusted_influence_and_bootstrap_agree():
+    """Two independent routes to the same standard error."""
+    sim = simulate_experiment(n=20_000, horizon=8, observation_window=12, seed=4242)
+    covs = ["engagement", "plan", "tenure_bucket"]
+    eif = retained_periods_lift(sim.panel, horizon=8, estimator="adjusted", covariates=covs)
+    boot = retained_periods_lift(
+        sim.panel,
+        horizon=8,
+        estimator="adjusted",
+        covariates=covs,
+        inference="bootstrap",
+        n_boot=300,
+    )
+    assert eif.se == pytest.approx(boot.se, rel=0.15)
+    assert eif.estimate == pytest.approx(boot.estimate, rel=0.15)
+
+
+def test_adjusted_supports_a_confidence_sequence():
+    """The whole point of deriving the influence function."""
+    sim = simulate_experiment(n=20_000, horizon=8, observation_window=12, seed=99)
+    res = retained_periods_lift(
+        sim.panel,
+        horizon=8,
+        estimator="adjusted",
+        covariates=["engagement", "plan", "tenure_bucket"],
+    )
+    assert res.inference == "influence"
+    cs = res.confidence_sequence(n_target=40_000)
+    assert cs.lower < res.estimate < cs.upper
+    assert cs.peeking_cost > 1.0
 
 
 # ----------------------------------------------------------- variance reduction
@@ -87,7 +127,7 @@ def test_adjustment_and_stratification_actually_reduce_variance():
     """Otherwise they are assumptions bought for nothing."""
     reps = 40
     ses = {"unadjusted": [], "stratified": [], "adjusted": []}
-    for sim in _replicate(reps, 4000, seed0=51_000):
+    for sim in _replicate(reps, 6000, seed0=51_000):
         ses["unadjusted"].append(retained_periods_lift(sim.panel, horizon=8, estimator="unadjusted").se)
         ses["stratified"].append(
             retained_periods_lift(
@@ -96,8 +136,10 @@ def test_adjustment_and_stratification_actually_reduce_variance():
         )
         ses["adjusted"].append(
             retained_periods_lift(
-                sim.panel, horizon=8, estimator="adjusted",
-                covariates=["engagement", "plan", "tenure_bucket"], n_boot=40,
+                sim.panel,
+                horizon=8,
+                estimator="adjusted",
+                covariates=["engagement", "plan", "tenure_bucket"],
             ).se
         )
     med = {k: float(np.median(v)) for k, v in ses.items()}
@@ -132,9 +174,7 @@ def test_censoring_is_handled_where_naive_averaging_fails():
             capped = np.minimum(panel.n_periods, 8)
             naive_bias.append(capped[panel.arm == 1].mean() - capped[panel.arm == 0].mean())
             truth = sim.true_rmst_lift
-        rows.append(
-            (window, float(np.mean(sub_bias) - truth), float(np.mean(naive_bias) - truth), truth)
-        )
+        rows.append((window, float(np.mean(sub_bias) - truth), float(np.mean(naive_bias) - truth), truth))
 
     for window, sub_b, _naive_b, truth in rows:
         assert abs(sub_b) < 0.1 * abs(truth), f"window={window}: sublift bias {sub_b:+.4f}"
@@ -161,9 +201,12 @@ def test_confidence_sequence_survives_peeking_where_a_fixed_sample_test_does_not
     cs_false_alarms = 0
     for r in range(reps):
         sim = simulate_experiment(
-            n=n_max, horizon=6, observation_window=10,
+            n=n_max,
+            horizon=6,
+            observation_window=10,
             treatment_odds_ratio=1.0,  # exactly no effect
-            with_covariates=False, seed=91_000 + r,
+            with_covariates=False,
+            seed=91_000 + r,
         )
         panel = sim.panel
         assert sim.true_rmst_lift == pytest.approx(0.0, abs=1e-12)
@@ -197,8 +240,12 @@ def test_a_single_look_at_a_fixed_sample_test_is_still_calibrated():
     false_alarms = 0
     for r in range(reps):
         sim = simulate_experiment(
-            n=6000, horizon=6, observation_window=10, treatment_odds_ratio=1.0,
-            with_covariates=False, seed=110_000 + r,
+            n=6000,
+            horizon=6,
+            observation_window=10,
+            treatment_odds_ratio=1.0,
+            with_covariates=False,
+            seed=110_000 + r,
         )
         res = retained_periods_lift(sim.panel, horizon=6, estimator="unadjusted")
         false_alarms += res.ci[0] > 0 or res.ci[1] < 0
@@ -223,8 +270,12 @@ def test_cause_specific_effects_are_unbiased_and_calibrated():
     truth = None
     for r in range(reps):
         sim = simulate_experiment(
-            n=8000, horizon=8, observation_window=13, seed=200_000 + r,
-            involuntary_hazard=0.018, treatment_odds_ratio=0.80,
+            n=8000,
+            horizon=8,
+            observation_window=13,
+            seed=200_000 + r,
+            involuntary_hazard=0.018,
+            treatment_odds_ratio=0.80,
         )
         for c in churn_decomposition(sim.panel, horizon=8).causes:
             ests.setdefault(c.label, []).append(c.estimate)
@@ -244,8 +295,12 @@ def test_cause_specific_intervals_cover():
     covered: dict[str, int] = {}
     for r in range(reps):
         sim = simulate_experiment(
-            n=8000, horizon=8, observation_window=13, seed=300_000 + r,
-            involuntary_hazard=0.018, treatment_odds_ratio=0.80,
+            n=8000,
+            horizon=8,
+            observation_window=13,
+            seed=300_000 + r,
+            involuntary_hazard=0.018,
+            treatment_odds_ratio=0.80,
         )
         for c in churn_decomposition(sim.panel, horizon=8).causes:
             hit = c.ci[0] <= sim.true_periods_saved[c.label] <= c.ci[1]

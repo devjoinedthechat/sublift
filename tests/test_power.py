@@ -8,8 +8,12 @@ from sublift import duration_to_detect
 @pytest.fixture(scope="module")
 def plan():
     return duration_to_detect(
-        arrivals_per_period=4000, horizon=6, baseline_hazard=0.08,
-        treatment_odds_ratio=0.85, max_periods=12, pilot_n=8000,
+        arrivals_per_period=4000,
+        horizon=6,
+        baseline_hazard=0.08,
+        treatment_odds_ratio=0.85,
+        max_periods=12,
+        pilot_n=8000,
     )
 
 

@@ -9,8 +9,12 @@ from sublift import churn_decomposition, retained_periods_lift, simulate_experim
 @pytest.fixture(scope="module")
 def sim():
     return simulate_experiment(
-        n=30_000, seed=3, horizon=8, observation_window=13,
-        involuntary_hazard=0.018, treatment_odds_ratio=0.80,
+        n=30_000,
+        seed=3,
+        horizon=8,
+        observation_window=13,
+        involuntary_hazard=0.018,
+        treatment_odds_ratio=0.80,
     )
 
 
@@ -74,7 +78,8 @@ def test_influence_functions_agree_with_the_bootstrap(sim):
     for _ in range(150):
         b = churn_decomposition(
             panel.take(rng.integers(0, panel.n_subjects, size=panel.n_subjects)),
-            horizon=8, allow_extrapolation=True,
+            horizon=8,
+            allow_extrapolation=True,
         )
         for c in b.causes:
             draws[c.label].append(c.estimate)

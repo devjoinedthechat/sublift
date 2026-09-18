@@ -144,7 +144,7 @@ def uplift_scores(
     if learner not in _LEARNERS:
         raise ValueError(f"learner must be one of {_LEARNERS}, got {learner!r}.")
     if not (interaction_prior_sd == "cv" or (np.isscalar(interaction_prior_sd) and interaction_prior_sd > 0)):
-        raise ValueError("interaction_prior_sd must be a positive number or \"cv\".")
+        raise ValueError('interaction_prior_sd must be a positive number or "cv".')
 
     weights = _arm_weights(panel, horizon, metric, price)
     X_all, _, _ = design_matrix(panel.covariates[covariates])
@@ -195,8 +195,15 @@ def qini(
     ``q * overall_effect``: a model only earns its place by beating that line.
     """
     scores = uplift_scores(
-        panel, horizon=horizon, covariates=covariates, metric=metric, price=price,
-        learner=learner, interaction_prior_sd=interaction_prior_sd, n_folds=n_folds, seed=seed,
+        panel,
+        horizon=horizon,
+        covariates=covariates,
+        metric=metric,
+        price=price,
+        learner=learner,
+        interaction_prior_sd=interaction_prior_sd,
+        n_folds=n_folds,
+        seed=seed,
     )
     if np.isnan(scores).all():
         raise ValueError("No fold produced usable uplift scores; check arm sizes.")
@@ -239,7 +246,9 @@ def qini(
     frame = pd.DataFrame(rows)
     valid = frame.dropna(subset=["incremental_per_subscriber"])
     auc = (
-        float(np.trapezoid(valid["incremental_per_subscriber"] - valid["random_targeting"], valid["fraction"]))
+        float(
+            np.trapezoid(valid["incremental_per_subscriber"] - valid["random_targeting"], valid["fraction"])
+        )
         if len(valid) > 1
         else float("nan")
     )

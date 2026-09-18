@@ -27,6 +27,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .exceptions import NotIdentifiedError
+
 __all__ = ["DiscreteSurvival", "fit_survival", "weighted_value", "empirical_revenue_weights"]
 
 
@@ -103,7 +105,7 @@ def fit_survival(
             "an assumption, not a measurement."
         )
         if not allow_extrapolation:
-            raise ValueError(msg + " Lower the horizon, or pass allow_extrapolation=True.")
+            raise NotIdentifiedError(msg + " Lower the horizon, or pass allow_extrapolation=True.")
         warnings.warn(msg, stacklevel=2)
 
     with np.errstate(invalid="ignore", divide="ignore"):

@@ -1,0 +1,7 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question about method
+    url: https://github.com/devjoinedthechat/sublift/discussions
+    about: >-
+      Not sure which estimator fits, what horizon to pick, or whether your censoring is
+      administrative? Ask here. Method questions are welcome and there are no stupid ones.

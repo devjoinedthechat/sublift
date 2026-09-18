@@ -57,8 +57,13 @@ def test_end_of_month_signup_bills_on_the_last_day_of_short_months():
     def periods_at(cut):
         return list(
             SubscriberPanel.from_spans(
-                df, subject="uid", arm="variant", assigned_at="assigned", ended_at="ended",
-                observed_through=cut, billing_interval="month",
+                df,
+                subject="uid",
+                arm="variant",
+                assigned_at="assigned",
+                ended_at="ended",
+                observed_through=cut,
+                billing_interval="month",
             ).n_periods
         )
 
@@ -84,9 +89,7 @@ def test_end_of_month_signup_bills_on_the_last_day_of_short_months():
 def test_monthly_anniversary_edge_cases(start, end, expected):
     from sublift.panel import _periods_between
 
-    got = _periods_between(
-        pd.Series(pd.to_datetime([start])), pd.Series(pd.to_datetime([end])), "month"
-    )
+    got = _periods_between(pd.Series(pd.to_datetime([start])), pd.Series(pd.to_datetime([end])), "month")
     assert int(got.iloc[0]) == expected
 
 
@@ -111,8 +114,12 @@ def test_end_after_the_cut_is_censored_with_a_warning():
     """Anything past the data cut is information the experiment did not have."""
     with pytest.warns(UserWarning, match="after the data cut"):
         p = SubscriberPanel.from_spans(
-            frame(), subject="uid", arm="variant", assigned_at="assigned",
-            ended_at="ended", observed_through="2025-03-31",
+            frame(),
+            subject="uid",
+            arm="variant",
+            assigned_at="assigned",
+            ended_at="ended",
+            observed_through="2025-03-31",
         )
     assert not p.event[1]  # uid 2 ended 2025-04-15, after the cut
 
@@ -138,16 +145,25 @@ def test_unparseable_dates_are_rejected():
     bad = frame(assigned=["2025-01-15", "not a date", "2025-01-31", "2025-03-01"])
     with pytest.raises(PanelError, match="not parseable dates"):
         SubscriberPanel.from_spans(
-            bad, subject="uid", arm="variant", assigned_at="assigned",
-            ended_at="ended", observed_through="2025-06-30",
+            bad,
+            subject="uid",
+            arm="variant",
+            assigned_at="assigned",
+            ended_at="ended",
+            observed_through="2025-06-30",
         )
 
 
 def test_per_subject_cut_column_is_supported():
     df = frame().assign(cut=["2025-06-30", "2025-06-30", "2025-02-28", "2025-06-30"])
     p = SubscriberPanel.from_spans(
-        df, subject="uid", arm="variant", assigned_at="assigned", ended_at="ended",
-        observed_through="cut", billing_interval="month",
+        df,
+        subject="uid",
+        arm="variant",
+        assigned_at="assigned",
+        ended_at="ended",
+        observed_through="cut",
+        billing_interval="month",
     )
     # uid 3 assigned 2025-01-31 and cut on 2025-02-28: one anniversary, so two periods,
     # while everyone else runs to June.
@@ -159,8 +175,13 @@ def test_cause_requires_two_levels():
     df = frame(why=[None, "cancelled", None, "cancelled"])
     with pytest.raises(PanelError, match="at least two"):
         SubscriberPanel.from_spans(
-            df, subject="uid", arm="variant", assigned_at="assigned", ended_at="ended",
-            observed_through="2025-06-30", cause="why",
+            df,
+            subject="uid",
+            arm="variant",
+            assigned_at="assigned",
+            ended_at="ended",
+            observed_through="2025-06-30",
+            cause="why",
         )
 
 
@@ -168,8 +189,13 @@ def test_missing_cause_on_a_churned_subscriber_is_rejected():
     df = frame(why=[None, None, None, "cancelled"])
     with pytest.raises(PanelError, match="missing for"):
         SubscriberPanel.from_spans(
-            df, subject="uid", arm="variant", assigned_at="assigned", ended_at="ended",
-            observed_through="2025-06-30", cause="why",
+            df,
+            subject="uid",
+            arm="variant",
+            assigned_at="assigned",
+            ended_at="ended",
+            observed_through="2025-06-30",
+            cause="why",
         )
 
 

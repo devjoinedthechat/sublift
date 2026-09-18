@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "sublift: incremental LTV measurement for subscription retention experiments"
+message: "If you use sublift in work you publish, please cite it."
+type: software
+authors:
+  - alias: devjoinedthechat
+    website: "https://github.com/devjoinedthechat"
+repository-code: "https://github.com/devjoinedthechat/sublift"
+abstract: >-
+  sublift estimates the incremental lifetime value of a retention intervention
+  from a randomized subscription experiment, over an explicit horizon of billing
+  periods. It handles right-censored outcomes, models churn in discrete billing
+  periods, separates voluntary from involuntary churn as competing risks, and
+  provides anytime-valid confidence sequences so that interim monitoring does not
+  inflate the false-positive rate.
+keywords:
+  - causal inference
+  - survival analysis
+  - experimentation
+  - sequential testing
+  - subscription
+  - churn
+  - customer lifetime value
+license: Apache-2.0
+version: 0.1.0

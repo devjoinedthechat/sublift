@@ -2,9 +2,7 @@ import pytest
 
 
 def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "slow: statistical validation by simulation; run with -m slow"
-    )
+    config.addinivalue_line("markers", "slow: statistical validation by simulation; run with -m slow")
 
 
 @pytest.fixture(scope="session")

@@ -49,9 +49,7 @@ class RandomizationCheck:
     def imbalanced(self) -> list[str]:
         if self.balance is None:
             return []
-        return self.balance.loc[
-            self.balance["std_diff"].abs() > self.smd_threshold, "covariate"
-        ].tolist()
+        return self.balance.loc[self.balance["std_diff"].abs() > self.smd_threshold, "covariate"].tolist()
 
     @property
     def ok(self) -> bool:
@@ -138,9 +136,7 @@ def _balance(panel: SubscriberPanel) -> pd.DataFrame:
             series = {col: pd.to_numeric(s, errors="coerce").to_numpy(dtype=float)}
         else:
             as_str = s.astype(str).to_numpy()
-            series = {
-                f"{col}={lv}": (as_str == lv).astype(float) for lv in sorted(pd.unique(as_str))
-            }
+            series = {f"{col}={lv}": (as_str == lv).astype(float) for lv in sorted(pd.unique(as_str))}
         for name, values in series.items():
             a, b = values[treat], values[ctrl]
             pooled = np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)

@@ -21,7 +21,8 @@
   <a href="#why-not-just">Why not just…</a> ·
   <a href="#does-it-actually-work">Validation</a> ·
   <a href="#api">API</a> ·
-  <a href="#assumptions-and-scope">Scope</a>
+  <a href="#assumptions-and-scope">Scope</a> ·
+  <a href="docs/">Docs</a>
 </p>
 
 ---
@@ -131,21 +132,38 @@ you pass `allow_extrapolation=True` and label the number a projection.
 
 ### Three estimators, same estimand
 
-| | assumes | inference | monitor sequentially? |
-|---|---|---|---|
-| `unadjusted` | randomization, independent censoring | influence function | ✅ |
-| **`stratified`** (default) | + strata are pre-assignment | influence function | ✅ |
-| `adjusted` | + a hazard model in the covariates | bootstrap | ❌ |
+| | assumes | inference | monitor sequentially? | good below ~5k subscribers? |
+|---|---|---|---|---|
+| `unadjusted` | randomization, independent censoring | influence function | ✅ | ✅ |
+| **`stratified`** (default) | + strata are pre-assignment | influence function | ✅ | ✅ |
+| `adjusted` | + a hazard model in the covariates | efficient influence function | ✅ | ❌ |
 
-`stratified` is the default because it both reduces variance and stays valid under monitoring.
-A handful of prognostic strata — plan, tenure bucket, pre-period engagement quantile — recovers
-most of what full covariate adjustment gets you.
+`stratified` is the default because it reduces variance, stays valid under monitoring, and its
+influence function is **exact at any sample size**. A handful of prognostic strata — plan,
+tenure bucket, pre-period engagement quantile — recovers most of what full covariate adjustment
+gets you.
 
-`adjusted` fits a discrete-time logistic hazard **per arm with a saturated time baseline**, then
-standardizes over the covariate distribution (g-computation). That specific configuration keeps
-it consistent under randomization even when the covariate model is misspecified
-(Moore & van der Laan, 2009). It gets the most from continuous covariates, and costs you the
-confidence sequence.
+`adjusted` fits a discrete-time logistic hazard **per arm with a saturated time baseline**,
+standardizes over the covariate distribution, then corrects with its efficient influence
+function — a one-step (AIPW) estimator. That buys three things at once: standard errors without
+200 bootstrap refits, **anytime-valid monitoring for the estimator that reduces variance the
+most**, and double robustness, since the augmentation holds the estimate up where the hazard
+model is wrong. It gets the most from continuous covariates, which stratification can only
+bucket.
+
+Its limitation is asymptotic: coverage is ~93% at 4,000 subscribers, nominal by ~16,000.
+sublift warns below 5,000 rather than quietly running narrow. See
+[choosing an estimator](docs/choosing-an-estimator.md).
+
+### Censoring you know rather than estimate
+
+Under administrative censoring, a subscriber's potential follow-up is fixed the day they enter
+the experiment, by the distance from their assignment date to the data cut. That is known for
+**everyone** — including subscribers who churned in period one, long before the cut.
+
+`from_spans` records it, so the censoring distribution used by `adjusted` is computed exactly
+instead of inferred from whoever happened to survive. Panels built from period counts fall back
+on reverse Kaplan–Meier, and sublift tells you which one it used rather than leaving it implicit.
 
 ### Anytime-valid monitoring
 
@@ -158,9 +176,10 @@ A confidence sequence is valid *simultaneously at every sample size*: across unl
 the probability it ever excludes the truth is at most α. Stop whenever you like, including
 because of what you just saw.
 
-This is why the influence functions are derived by hand rather than bootstrapped. The bootstrap
-gives standard errors; only the influence function gives the i.i.d. sequence a confidence
-sequence needs. The price is ~1.5–1.7× the fixed-sample width — the honest cost of looking.
+All three estimators support it. This is why the influence functions are derived by hand rather
+than bootstrapped: the bootstrap gives standard errors, but only an influence function gives the
+i.i.d. per-subject sequence a confidence sequence needs. The price is ~1.5–1.7× the fixed-sample
+width — the honest cost of looking.
 
 ### Voluntary vs involuntary churn
 
@@ -272,6 +291,10 @@ pytest -m slow                           # asserts it
 |---|---|---|---|---|
 | `unadjusted` | 94.8% | +0.00007 | 0.0919 | 0.0929 |
 | `stratified` | 93.8% | −0.00097 | 0.0910 | 0.0927 |
+| `adjusted` (n=16k) | 94.5% | −0.00018 | — | se/sd = 1.009 |
+
+`adjusted` is shown at 16,000 subscribers because its influence function is first-order; at
+4,000 it covers at 93.0%, which is why it warns below 5,000.
 
 **Censoring is handled where the obvious alternative fails.** "Naive" differences mean observed
 tenure — treating still-active subscribers as though they ended on the day you pulled the data.
@@ -307,6 +330,10 @@ effect:
 within Monte Carlo error, and the reported standard error within 1.5% and 4% of the *actual*
 sampling spread.
 
+**The new influence functions agree with the bootstrap.** The `adjusted` estimator's efficient
+influence function and a 300-draw bootstrap of the same estimator land within a few percent of
+each other — two independent routes to the same standard error.
+
 ## API
 
 | | |
@@ -324,6 +351,10 @@ sampling spread.
 | `qini` / `uplift_scores` | targeting |
 | `simulate_experiment` | ground-truth data for planning and validation |
 
+Results render as HTML in Jupyter, and `SubliftError` / `PanelError` / `NotIdentifiedError`
+separate "your data is malformed" from "the data cannot answer that question". Both still
+subclass `ValueError`, so existing handlers keep working.
+
 ## Assumptions and scope
 
 What sublift assumes, stated rather than buried:
@@ -335,19 +366,37 @@ What sublift assumes, stated rather than buried:
   the bias randomization removed; the panel constructors reject it.
 - **Two arms** at a time.
 
-Not in v0.1, and on the roadmap:
+Roadmap:
 
-- [ ] Efficient influence function for `adjusted`, which would give it a confidence sequence
-      *(largest known gap)*
-- [ ] Informative censoring via inverse-probability-of-censoring weights
-- [ ] More than two arms
-- [ ] Multiple-comparison control across segments
+- [x] Efficient influence function for `adjusted`, giving it a confidence sequence
+- [ ] Informative censoring via inverse-probability-of-censoring weights *(largest known gap)*
+- [ ] More than two arms, with multiple-comparison control across segments
+- [ ] Stratified and covariate-adjusted versions of `churn_decomposition`
+- [ ] Pauses, plan switches and win-backs in the panel and the simulator
+
+## Documentation
+
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | From a warehouse table to a defensible number |
+| [Choosing an estimator](docs/choosing-an-estimator.md) | Which of the three, and why |
+| [Monitoring a running test](docs/monitoring.md) | Why peeking breaks a p-value |
+| [Voluntary vs involuntary churn](docs/competing-risks.md) | Competing risks, and why the split is exact |
+| [Assumptions](docs/assumptions.md) | When sublift is wrong — read this one |
+| [Method](docs/method.md) | The estimand, the influence functions, the references |
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). One rule: **anything that reports an interval ships with
 a coverage test.** An estimator that is fast, elegant and miscalibrated is worse than no
 estimator, because someone will ship a decision on it.
+
+Good first contributions, and issues where help is genuinely wanted, are labelled on the
+[issue tracker](https://github.com/devjoinedthechat/sublift/issues). Method questions are
+welcome in [Discussions](https://github.com/devjoinedthechat/sublift/discussions) — there are no
+stupid ones, statistics is large, and "you should already know this" is never a useful answer.
+
+By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## References
 
@@ -359,6 +408,11 @@ estimator, because someone will ship a decision on it.
   influence function for the product-limit estimator.
 - Fine & Gray (1999) — *A proportional hazards model for the subdistribution of a competing
   risk*. Background for the cumulative-incidence decomposition.
+
+## Citing
+
+If sublift contributes to something you publish, there is a [CITATION.cff](CITATION.cff);
+GitHub's "Cite this repository" button will format it for you.
 
 ## License
 

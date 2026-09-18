@@ -4,11 +4,16 @@
 git clone https://github.com/devjoinedthechat/sublift && cd sublift
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+pre-commit install          # optional, runs ruff on commit
 
-pytest              # fast suite
-pytest -m slow      # statistical validation, ~90s
-ruff check src tests
+pytest                      # fast suite, ~10s
+pytest -m slow              # statistical validation, ~2min
+ruff check src tests examples
+ruff format src tests examples
 ```
+
+The [docs](docs/) explain the method; [docs/method.md](docs/method.md) has the estimand and
+every influence function, which is the fastest way in if you are here to change the statistics.
 
 ## The one rule
 
@@ -36,3 +41,18 @@ censoring, a different price schedule — extend `sublift.datasets` first, then 
 Docstrings say *why*, not *what*. The code is short enough to read; what it can't tell you is
 which assumption a line is protecting. If you find yourself writing "sets the hazard", write
 what breaks when it isn't set that way instead.
+
+Error messages are part of the interface. Say what went wrong, why it matters, and what to do
+instead — most people meet a library through its errors before they meet its docs.
+
+## A note on disagreement
+
+This project will have real methodological disagreements, and that is healthy. Two things make
+them productive here:
+
+1. **Simulate it.** `sublift.datasets` generates experiments with closed-form truth. Most
+   arguments about whether an estimator is biased can be settled in twenty lines rather than in
+   a thread.
+2. **Nobody has all of statistics.** If you spot something wrong, you have done the project a
+   favour regardless of how it is phrased; if you do not follow something, asking is normal and
+   welcome. See the [Code of Conduct](CODE_OF_CONDUCT.md).

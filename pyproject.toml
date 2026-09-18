@@ -27,14 +27,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4", "ruff>=0.5"]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.5",
+]
 
 [project.urls]
 Homepage = "https://github.com/devjoinedthechat/sublift"
+Repository = "https://github.com/devjoinedthechat/sublift"
 Issues = "https://github.com/devjoinedthechat/sublift/issues"
+Changelog = "https://github.com/devjoinedthechat/sublift/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sublift"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "tests/", "examples/", "docs/", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -44,7 +53,30 @@ addopts = "-m 'not slow'"
 [tool.ruff]
 line-length = 110
 src = ["src", "tests"]
+target-version = "py310"
+
+[tool.ruff.format]
+quote-style = "double"
+skip-magic-trailing-comma = false
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "W"]
-ignore = ["E501"]
+select = ["E", "F", "I", "UP", "B", "W", "C4", "SIM", "RET", "PIE", "NPY"]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "SIM108",  # ternaries are not always clearer than an if/else
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.coverage.run]
+source = ["sublift"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "def __repr__",
+]

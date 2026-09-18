@@ -1,0 +1,24 @@
+name: Feature or method request
+description: A capability sublift does not have yet.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to measure?
+      description: >
+        The experiment or decision, not the API. Knowing the underlying question usually changes
+        what the right answer is — sometimes sublift can already do it a different way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: >
+        Papers, or an implementation elsewhere. Especially valuable for anything that reports an
+        interval, since it will need a coverage test against known truth before it can ship.

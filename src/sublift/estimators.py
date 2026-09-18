@@ -34,7 +34,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from .censoring import censoring_survival
 from .diagnostics import warn_on_srm
+from .exceptions import NotIdentifiedError
 from .influence import contrast_influence, value_influence
 from .logistic import design_matrix, fit_logistic
 from .panel import SubscriberPanel
@@ -43,6 +45,9 @@ from .survival import empirical_revenue_weights, fit_survival, weighted_value
 __all__ = ["incremental_ltv", "retained_periods_lift", "LiftResult", "ArmSummary"]
 
 _ESTIMATORS = ("unadjusted", "stratified", "adjusted")
+
+# Below this the one-step estimator's first-order variance is measurably optimistic.
+_ADJUSTED_MIN_N = 5_000
 
 
 @dataclass(frozen=True)
@@ -184,6 +189,11 @@ class LiftResult:
     def __str__(self) -> str:
         return self.summary()
 
+    def _repr_html_(self) -> str:
+        from .report import html_result
+
+        return html_result(self)
+
 
 # --------------------------------------------------------------- public API
 
@@ -200,6 +210,7 @@ def incremental_ltv(
     n_boot: int = 200,
     allow_extrapolation: bool = False,
     expected_ratio: float = 0.5,
+    inference: str = "influence",
     seed: int | None = 0,
 ) -> LiftResult:
     """Incremental lifetime value to ``horizon`` billing periods.
@@ -233,6 +244,7 @@ def incremental_ltv(
         n_boot=n_boot,
         allow_extrapolation=allow_extrapolation,
         expected_ratio=expected_ratio,
+        inference=inference,
         seed=seed,
     )
 
@@ -248,6 +260,7 @@ def retained_periods_lift(
     n_boot: int = 200,
     allow_extrapolation: bool = False,
     expected_ratio: float = 0.5,
+    inference: str = "influence",
     seed: int | None = 0,
 ) -> LiftResult:
     """Incremental billing periods retained -- restricted mean survival time, contrasted.
@@ -267,6 +280,7 @@ def retained_periods_lift(
         n_boot=n_boot,
         allow_extrapolation=allow_extrapolation,
         expected_ratio=expected_ratio,
+        inference=inference,
         seed=seed,
     )
 
@@ -274,8 +288,22 @@ def retained_periods_lift(
 # ------------------------------------------------------------------ routing
 
 
-def _estimate(panel, *, horizon, estimator, metric, strata, covariates, price, alpha, n_boot,
-              allow_extrapolation, seed, expected_ratio=0.5):
+def _estimate(
+    panel,
+    *,
+    horizon,
+    estimator,
+    metric,
+    strata,
+    covariates,
+    price,
+    alpha,
+    n_boot,
+    allow_extrapolation,
+    seed,
+    expected_ratio=0.5,
+    inference="influence",
+):
     if estimator not in _ESTIMATORS:
         raise ValueError(f"estimator must be one of {_ESTIMATORS}, got {estimator!r}.")
     if not 0 < alpha < 1:
@@ -301,10 +329,21 @@ def _estimate(panel, *, horizon, estimator, metric, strata, covariates, price, a
     else:
         if not covariates:
             raise ValueError("estimator='adjusted' needs covariates=[...] to adjust for.")
-        out = _adjusted(panel, horizon, weights, list(covariates), n_boot, alpha, allow_extrapolation, seed)
+        out = _adjusted(
+            panel,
+            horizon,
+            weights,
+            list(covariates),
+            n_boot,
+            alpha,
+            allow_extrapolation,
+            seed,
+            inference=inference,
+        )
 
     ci = _interval(out["estimate"], out["se"], alpha, out.get("boot"))
     estimate, se = out["estimate"], out["se"]
+    notes.extend(out.get("notes", []))
 
     return LiftResult(
         estimator=estimator,
@@ -334,7 +373,7 @@ def _resolve_horizon(panel: SubscriberPanel, horizon: int | None, allow_extrapol
         return usable
     horizon = int(horizon)
     if horizon > usable and not allow_extrapolation:
-        raise ValueError(
+        raise NotIdentifiedError(
             f"horizon={horizon} exceeds the {usable} periods of follow-up both arms have. "
             "Past that point at least one arm's curve is carried forward on no data, so the "
             f"contrast is not a measurement. Use horizon={usable}, wait for more follow-up, or "
@@ -354,7 +393,7 @@ def _arm_weights(panel, horizon, metric, price) -> dict[int, tuple[np.ndarray, b
                 raise ValueError(f"price dict is missing arm(s) {sorted(missing)}.")
             return {a: (_fit_schedule(price[panel.arm_labels[a]], horizon), False) for a in (0, 1)}
         sched = _fit_schedule(price, horizon)
-        return {a: (sched, False) for a in (0, 1)}
+        return dict.fromkeys((0, 1), (sched, False))
 
     if panel.revenue is None:
         raise ValueError(
@@ -487,9 +526,7 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
         in_k = codes == k
         sizes = {a: int((in_k & (panel.arm == a)).sum()) for a in (0, 1)}
         if min(sizes.values()) < 2:
-            notes.append(
-                f"stratum {levels[k]!r} dropped: {sizes[0]} control / {sizes[1]} treatment subjects"
-            )
+            notes.append(f"stratum {levels[k]!r} dropped: {sizes[0]} control / {sizes[1]} treatment subjects")
             continue
         kept |= in_k
         shares[k] = in_k.sum()
@@ -509,7 +546,7 @@ def _stratified(panel, horizon, weights, strata, allow_extrapolation, notes):
 
     total = shares.sum()
     if total == 0:
-        raise ValueError("Every stratum was too small to estimate; use coarser strata.")
+        raise NotIdentifiedError("Every stratum was too small to estimate; use coarser strata.")
     if kept.sum() < n:
         notes.append(f"{n - int(kept.sum())} of {n} subjects fell in dropped strata and were excluded")
     pi = shares / total
@@ -561,39 +598,151 @@ def _person_period(panel: SubscriberPanel, horizon: int):
     return rows, period.astype(np.int64), churn, capped, starts
 
 
-def _adjusted(panel, horizon, weights, covariates, n_boot, alpha, allow_extrapolation, seed):
+def _adjusted(
+    panel, horizon, weights, covariates, n_boot, alpha, allow_extrapolation, seed, inference="influence"
+):
+    """Covariate-adjusted g-computation, corrected by its efficient influence function.
+
+    The plain g-computation estimator standardizes a fitted hazard model over the
+    covariate distribution. It is consistent under randomization with a saturated
+    time baseline, but it has no tractable influence function, which is why it
+    used to be stuck with the bootstrap -- and therefore with no way to monitor a
+    running experiment.
+
+    Adding the augmentation term of the efficient influence function fixes both
+    problems at once. The one-step estimator
+
+        V_a = (1/n) sum_i S_a(t|X_i) * (1 - Q_i(t)),  summed against the weights
+
+    where ``Q_i`` accumulates inverse-censoring-weighted residuals from the
+    subject's own observed renewal decisions, is asymptotically linear with a
+    known influence function. That buys three things: a standard error that does
+    not cost 200 model refits, an anytime-valid confidence sequence for the
+    estimator that reduces variance the most, and double robustness -- the
+    augmentation keeps the estimate consistent even where the hazard model is
+    wrong, because assignment is randomized and the censoring distribution is
+    known rather than modelled.
+
+    The price is the inverse-censoring weight ``1/Gbar(s-1)``. When very few
+    subscribers could have been observed to the horizon those weights blow up,
+    which :mod:`sublift.censoring` warns about rather than absorbing silently.
+
+    The other price is asymptotic. Being asymptotically linear is a large-sample
+    property, and in simulation this estimator's intervals cover at about 93% at
+    4,000 subscribers, reaching the nominal 95% by roughly 16,000. Below a few
+    thousand, prefer ``estimator="stratified"``, whose influence function is
+    exact in finite samples rather than first-order.
+    """
     if panel.covariates is None:
         raise ValueError("Panel carries no covariates; rebuild it with covariates=[...] to adjust.")
     missing = [c for c in covariates if c not in panel.covariates.columns]
     if missing:
         raise ValueError(f"Covariate(s) {missing} not in the panel's covariates.")
+    if inference not in ("influence", "bootstrap"):
+        raise ValueError("inference must be 'influence' or 'bootstrap'.")
 
-    X_sub, names, enc = design_matrix(panel.covariates[covariates])
+    X_sub, _, _ = design_matrix(panel.covariates[covariates])
     rows, period, churn, capped, starts = _person_period(panel, horizon)
 
-    estimate, arms = _gcomp(panel, horizon, weights, X_sub, rows, period, churn)
-    rng = np.random.default_rng(seed)
-    n = panel.n_subjects
-    draws = np.empty(n_boot)
-    rel_draws = np.empty(n_boot)
-    for b in range(n_boot):
-        idx = rng.integers(0, n, size=n)
-        diff, ctrl = _gcomp_boot(panel, horizon, weights, X_sub, idx, capped, starts, period, churn)
-        draws[b] = diff
-        rel_draws[b] = diff / ctrl if ctrl else np.nan
+    if inference == "bootstrap":
+        estimate, arms = _gcomp(panel, horizon, weights, X_sub, rows, period, churn)
+        rng = np.random.default_rng(seed)
+        n = panel.n_subjects
+        draws, rel_draws = np.empty(n_boot), np.empty(n_boot)
+        for b in range(n_boot):
+            idx = rng.integers(0, n, size=n)
+            diff, ctrl = _gcomp_boot(panel, horizon, weights, X_sub, idx, capped, starts, period, churn)
+            draws[b] = diff
+            rel_draws[b] = diff / ctrl if ctrl else np.nan
+        draws = draws[np.isfinite(draws)]
+        rel_draws = rel_draws[np.isfinite(rel_draws)]
+        return {
+            "estimate": estimate,
+            "se": float(draws.std(ddof=1)) if draws.size > 1 else float("nan"),
+            "arms": arms,
+            "boot": draws,
+            "boot_relative": rel_draws,
+            "inference": "bootstrap",
+        }
 
-    ok = np.isfinite(draws)
-    draws = draws[ok]
-    rel_draws = rel_draws[np.isfinite(rel_draws)]
-    se = float(draws.std(ddof=1)) if draws.size > 1 else float("nan")
+    gbar, gbar_source = censoring_survival(panel, horizon)
+    n = panel.n_subjects
+    if n < _ADJUSTED_MIN_N:
+        warnings.warn(
+            f"estimator='adjusted' with {n:,} subscribers: its influence function is a "
+            "large-sample approximation, and below a few thousand subjects the intervals run "
+            "slightly narrow (about 93% coverage at 4,000 in simulation). Prefer "
+            "estimator='stratified', whose influence function is exact at any size, or pass "
+            "inference='bootstrap'.",
+            stacklevel=4,
+        )
+    t_grid = np.arange(1, horizon + 1, dtype=np.int64)[None, :]
+    at_risk = panel.n_periods[:, None] >= t_grid
+    churned_at = (panel.n_periods[:, None] == t_grid) & panel.event[:, None]
+
+    values, eifs, arms, notes = {}, {}, {}, []
+    for a in (0, 1):
+        mask = panel.arm[rows] == a
+        fit = _fit_hazards(mask, X_sub, rows, period, churn, horizon)
+        hazard_i = _individual_hazard(fit, X_sub, horizon)
+        surv_i = np.cumprod(1.0 - hazard_i, axis=1)
+
+        share = float((panel.arm == a).mean())
+        in_arm = (panel.arm == a)[:, None]
+        residual = churned_at.astype(float) - at_risk * hazard_i
+        # Inverse-censoring-weighted residuals, divided through by the subject's own
+        # survival so the running sum telescopes into S(t|X)/S(s|X) -- a ratio that is
+        # always <= 1, which is what keeps the augmentation bounded.
+        contribution = in_arm * residual / (share * gbar[None, :])
+        accumulated = np.cumsum(contribution / np.maximum(surv_i, 1e-12), axis=1)
+
+        corrected = surv_i * (1.0 - accumulated)
+        lagged = np.concatenate((np.ones((n, 1)), corrected[:, :-1]), axis=1)
+        curve_lagged = lagged.mean(axis=0)
+        curve = corrected.mean(axis=0)
+
+        w = weights[a][0]
+        values[a] = float((w * curve_lagged).sum())
+        # Mean zero by construction, since the curve is the sample mean of `lagged`.
+        eifs[a] = (w * (lagged - curve_lagged[None, :])).sum(axis=1)
+
+        if np.any(np.diff(curve) > 1e-9):
+            notes.append(
+                f"the {panel.arm_labels[a]!r} corrected survival curve is not monotone, which "
+                "means the influence-function correction is large -- the hazard model is fitting "
+                "poorly, so prefer estimator='stratified' here"
+            )
+        arms[panel.arm_labels[a]] = ArmSummary(
+            label=panel.arm_labels[a],
+            n=int((panel.arm == a).sum()),
+            value=values[a],
+            survival=curve,
+            at_risk=np.asarray(
+                [int((panel.n_periods[panel.arm == a] >= t).sum()) for t in range(1, horizon + 1)]
+            ),
+            weights=w,
+        )
+
+    psi = eifs[1] - eifs[0]
+    notes.append(f"censoring distribution: {gbar_source}")
     return {
-        "estimate": estimate,
-        "se": se,
+        "estimate": values[1] - values[0],
+        "se": float(np.sqrt((psi**2).sum()) / n),
         "arms": arms,
-        "boot": draws,
-        "boot_relative": rel_draws,
-        "inference": "bootstrap",
+        "influence": psi,
+        "control_influence": -eifs[0],
+        "inference": "influence",
+        "notes": notes,
     }
+
+
+def _individual_hazard(fit, X_all, horizon):
+    """Per-subject hazard h(t | X_i) under one arm, shape (n_subjects, horizon)."""
+    alpha_t = fit.coef[:horizon]
+    gamma = fit.coef[horizon:]
+    offset = X_all @ gamma if gamma.size else np.zeros(X_all.shape[0])
+    lin = alpha_t[None, :] + offset[:, None]
+    return 1.0 / (1.0 + np.exp(-lin))
 
 
 def _fit_hazards(arm_rows_mask, X_sub, rows, period, churn, horizon):
@@ -626,8 +775,13 @@ def _assemble(panel, horizon, weights, curves, counts):
         value = float(np.sum(w * np.concatenate(([1.0], surv[:-1]))))
         values[a] = value
         arms[label] = ArmSummary(
-            label=label, n=counts[a], value=value, survival=surv,
-            at_risk=np.array([int((panel.n_periods[panel.arm == a] >= t).sum()) for t in range(1, horizon + 1)]),
+            label=label,
+            n=counts[a],
+            value=value,
+            survival=surv,
+            at_risk=np.array(
+                [int((panel.n_periods[panel.arm == a] >= t).sum()) for t in range(1, horizon + 1)]
+            ),
             weights=w,
         )
     return values[1] - values[0], arms
@@ -662,7 +816,5 @@ def _gcomp_boot(panel, horizon, weights, X_sub, idx, capped, starts, period, chu
             return np.nan, np.nan
         fit = _fit_hazards(mask, X_b, b_rows, b_period, b_churn, horizon)
         curves[a] = _predict_curve(fit, X_b, horizon)
-    values = [
-        float(np.sum(weights[a][0] * np.concatenate(([1.0], curves[a][:-1])))) for a in (0, 1)
-    ]
+    values = [float(np.sum(weights[a][0] * np.concatenate(([1.0], curves[a][:-1])))) for a in (0, 1)]
     return values[1] - values[0], values[0]

@@ -7,6 +7,8 @@ checkable rather than asserted. This is the same machinery as
     python examples/validation_report.py        # ~2 minutes
 """
 
+import warnings
+
 import numpy as np
 
 import sublift as sl
@@ -14,6 +16,7 @@ import sublift as sl
 REPS = 400
 N = 4000
 HORIZON = 8
+ADJ_COVS = ["engagement", "plan", "tenure_bucket"]
 
 
 def rule(title):
@@ -23,26 +26,34 @@ def rule(title):
 # ---------------------------------------------------------------- calibration
 rule("1. Are the intervals real? (coverage of a nominal 95% interval)")
 
-configs = {
-    "unadjusted": {"estimator": "unadjusted"},
-    "stratified": {"estimator": "stratified", "strata": ["plan", "tenure_bucket"]},
-}
-for name, kw in configs.items():
+configs = [
+    ("unadjusted", N, {"estimator": "unadjusted"}),
+    ("stratified", N, {"estimator": "stratified", "strata": ["plan", "tenure_bucket"]}),
+    # The one-step estimator's influence function is first-order, so its coverage is a
+    # large-sample promise. Shown at both sizes, because the gap between them is the point.
+    ("adjusted", N, {"estimator": "adjusted", "covariates": ADJ_COVS}),
+    ("adjusted", 16_000, {"estimator": "adjusted", "covariates": ADJ_COVS}),
+]
+for name, n, kw in configs:
+    reps = REPS if n <= N else 150
     covered, ests, ses = 0, [], []
     truth = None
-    for r in range(REPS):
-        sim = sl.simulate_experiment(n=N, horizon=HORIZON, observation_window=12, seed=7000 + r)
-        res = sl.retained_periods_lift(sim.panel, horizon=HORIZON, **kw)
+    for r in range(reps):
+        sim = sl.simulate_experiment(n=n, horizon=HORIZON, observation_window=12, seed=7000 + r)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = sl.retained_periods_lift(sim.panel, horizon=HORIZON, **kw)
         covered += res.ci[0] <= sim.true_rmst_lift <= res.ci[1]
         ests.append(res.estimate)
         ses.append(res.se)
         truth = sim.true_rmst_lift
     ests = np.array(ests)
     print(
-        f"  {name:<12s} coverage {covered / REPS:6.1%}   "
+        f"  {name:<11s} n={n:<6,d} coverage {covered / reps:6.1%}   "
         f"bias {ests.mean() - truth:+.5f}   "
-        f"reported se {np.mean(ses):.4f} vs actual spread {ests.std(ddof=1):.4f}"
+        f"se/sd {np.mean(ses) / ests.std(ddof=1):.3f}"
     )
+print("  (`adjusted` is asymptotic: it warns below 5,000 rather than quietly running narrow)")
 
 # ------------------------------------------------------------------ censoring
 rule("2. What censoring does to the obvious alternative")
@@ -72,8 +83,12 @@ looks = np.arange(500, n_max + 1, 500)
 fixed_alarms = cs_alarms = 0
 for r in range(reps):
     sim = sl.simulate_experiment(
-        n=n_max, horizon=6, observation_window=10, treatment_odds_ratio=1.0,
-        with_covariates=False, seed=91_000 + r,
+        n=n_max,
+        horizon=6,
+        observation_window=10,
+        treatment_odds_ratio=1.0,
+        with_covariates=False,
+        seed=91_000 + r,
     )
     panel = sim.panel
     fixed_hit = cs_hit = False
@@ -102,8 +117,12 @@ ses: dict[str, list] = {}
 truth_cr = None
 for r in range(reps_cr):
     sim = sl.simulate_experiment(
-        n=8000, horizon=HORIZON, observation_window=13, seed=200_000 + r,
-        involuntary_hazard=0.018, treatment_odds_ratio=0.80,
+        n=8000,
+        horizon=HORIZON,
+        observation_window=13,
+        seed=200_000 + r,
+        involuntary_hazard=0.018,
+        treatment_odds_ratio=0.80,
     )
     for c in sl.churn_decomposition(sim.panel, horizon=HORIZON).causes:
         ests.setdefault(c.label, []).append(c.estimate)

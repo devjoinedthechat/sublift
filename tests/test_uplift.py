@@ -17,9 +17,7 @@ def flat():
 @pytest.fixture(scope="module")
 def heterogeneous():
     """The intervention lands much harder on engaged subscribers, and backfires on others."""
-    return simulate_experiment(
-        n=10_000, seed=77, horizon=8, observation_window=12, effect_modification=1.5
-    )
+    return simulate_experiment(n=10_000, seed=77, horizon=8, observation_window=12, effect_modification=1.5)
 
 
 def test_every_subscriber_is_scored_out_of_fold(flat):
@@ -63,9 +61,7 @@ def test_cross_fitting_changes_the_scores(flat):
 
 
 def test_qini_curve_is_well_formed(heterogeneous):
-    curve = qini(
-        heterogeneous.panel, horizon=8, covariates=COVS, fractions=np.array([0.25, 0.5, 0.75, 1.0])
-    )
+    curve = qini(heterogeneous.panel, horizon=8, covariates=COVS, fractions=np.array([0.25, 0.5, 0.75, 1.0]))
     f = curve.frame
     assert list(f["fraction"]) == [0.25, 0.5, 0.75, 1.0]
     assert f["n_targeted"].is_monotonic_increasing

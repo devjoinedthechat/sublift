@@ -9,11 +9,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-__all__ = ["SubscriberPanel"]
+from .exceptions import PanelError
 
-
-class PanelError(ValueError):
-    """The input data does not describe a well-formed retention experiment."""
+__all__ = ["SubscriberPanel", "PanelError"]
 
 
 @dataclass(frozen=True)
@@ -33,6 +31,14 @@ class SubscriberPanel:
     So a subject with ``n_periods=4, event=True`` paid for four periods and
     then cancelled; ``n_periods=4, event=False`` paid for four periods and is
     still subscribed. The distinction is the whole reason this library exists.
+
+    ``potential_followup``
+        Optional. How many periods the subscriber *could* have been observed
+        for, set by the distance from their assignment date to the data cut.
+        Known at baseline for everyone under administrative censoring, including
+        subscribers who churned early, so recording it lets the censoring
+        distribution be computed exactly instead of estimated. Populated
+        automatically by :meth:`from_spans`.
 
     ``cause``
         Optional. Why the subscription ended -- typically voluntary cancellation
@@ -56,6 +62,7 @@ class SubscriberPanel:
     revenue: np.ndarray | None = field(default=None, repr=False)
     cause: np.ndarray | None = field(default=None, repr=False)
     cause_labels: tuple[str, ...] = ()
+    potential_followup: np.ndarray | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------ build
 
@@ -138,6 +145,7 @@ class SubscriberPanel:
         covariates: Sequence[str] | None = None,
         revenue: str | None = None,
         cause: str | None = None,
+        potential_followup: str | None = None,
     ) -> SubscriberPanel:
         """Build from one row per subject-period (the long / panel form).
 
@@ -149,7 +157,8 @@ class SubscriberPanel:
         randomization removed.
         """
         cols = [subject, period, churned, arm] + ([revenue] if revenue else [])
-        cols += ([cause] if cause else []) + list(covariates or [])
+        cols += ([cause] if cause else []) + ([potential_followup] if potential_followup else [])
+        cols += list(covariates or [])
         _require_columns(df, cols)
 
         work = df.copy()
@@ -207,6 +216,7 @@ class SubscriberPanel:
 
         event = last["_churned"].to_numpy(dtype=bool)
         codes, cause_labels = _as_cause(last[cause] if cause else None, cause, event)
+        potential = _as_periods(first[potential_followup], potential_followup) if potential_followup else None
 
         return cls(
             subject=first[subject].to_numpy(),
@@ -218,6 +228,7 @@ class SubscriberPanel:
             revenue=rev,
             cause=codes,
             cause_labels=cause_labels,
+            potential_followup=potential,
         )
 
     @classmethod
@@ -301,6 +312,11 @@ class SubscriberPanel:
         n_periods = (elapsed + 1).to_numpy(dtype=np.int64)
         ev = churned.to_numpy(dtype=bool)
 
+        # Potential follow-up: assignment date to the data cut, regardless of when
+        # the subscription actually ended. Known for everybody because the cut is a
+        # calendar fact, not something the subscriber's behaviour decided.
+        potential = (_periods_between(start, cut, billing_interval) + 1).to_numpy(dtype=np.int64)
+
         arm_idx, labels = _as_arm(df[arm], arm, control)
         codes, cause_labels = _as_cause(df[cause] if cause else None, cause, ev)
 
@@ -325,6 +341,7 @@ class SubscriberPanel:
             revenue=rev,
             cause=codes,
             cause_labels=cause_labels,
+            potential_followup=potential,
         )
 
     # --------------------------------------------------------------- inspect
@@ -338,6 +355,14 @@ class SubscriberPanel:
             raise PanelError("Panel is empty.")
         if self.revenue is not None and self.revenue.shape[0] != n:
             raise PanelError("revenue matrix must have one row per subject.")
+        if self.potential_followup is not None:
+            if len(self.potential_followup) != n:
+                raise PanelError("potential_followup must have one entry per subject.")
+            if (self.potential_followup < self.n_periods).any():
+                raise PanelError(
+                    "Some subscribers were observed for more periods than their potential "
+                    "follow-up allows; the assignment dates and the data cut disagree."
+                )
         if self.cause is not None:
             if len(self.cause) != n:
                 raise PanelError("cause must have one entry per subject.")
@@ -388,9 +413,7 @@ class SubscriberPanel:
                 "select nearly everyone."
             )
         if mask.shape != (self.n_subjects,):
-            raise PanelError(
-                f"mask has shape {mask.shape}, expected ({self.n_subjects},)."
-            )
+            raise PanelError(f"mask has shape {mask.shape}, expected ({self.n_subjects},).")
         return self.take(np.flatnonzero(mask))
 
     def take(self, indices: np.ndarray) -> SubscriberPanel:
@@ -414,13 +437,14 @@ class SubscriberPanel:
             event=self.event[idx],
             arm_labels=self.arm_labels,
             covariates=(
-                self.covariates.iloc[idx].reset_index(drop=True)
-                if self.covariates is not None
-                else None
+                self.covariates.iloc[idx].reset_index(drop=True) if self.covariates is not None else None
             ),
             revenue=self.revenue[idx] if self.revenue is not None else None,
             cause=self.cause[idx] if self.cause is not None else None,
             cause_labels=self.cause_labels,
+            potential_followup=(
+                self.potential_followup[idx] if self.potential_followup is not None else None
+            ),
         )
 
     def describe(self) -> pd.DataFrame:
@@ -509,8 +533,7 @@ def _as_arm(s: pd.Series, name: str, control: object | None) -> tuple[np.ndarray
 def _broadcast_revenue(per_subject: np.ndarray, n_periods: np.ndarray) -> np.ndarray:
     width = int(n_periods.max())
     grid = np.arange(1, width + 1)[None, :]
-    out = np.where(grid <= n_periods[:, None], per_subject[:, None], np.nan)
-    return out
+    return np.where(grid <= n_periods[:, None], per_subject[:, None], np.nan)
 
 
 _INTERVAL_DAYS = {"week": 7, "day": 1}

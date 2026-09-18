@@ -46,7 +46,9 @@ class PowerCurve:
             "",
         ]
         if self.fixed_periods:
-            lines.append(f"  fixed-sample analysis (one look only): {self.fixed_periods} periods of enrollment")
+            lines.append(
+                f"  fixed-sample analysis (one look only): {self.fixed_periods} periods of enrollment"
+            )
         else:
             lines.append("  fixed-sample analysis: not powered within the horizon searched")
         if self.sequential_periods:
