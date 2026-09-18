@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml"><img src="https://github.com/devjoinedthechat/sublift/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.10–3.13">
-  <img src="https://img.shields.io/badge/tests-306-brightgreen" alt="306 tests">
+  <img src="https://img.shields.io/badge/tests-318-brightgreen" alt="318 tests">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <img src="https://img.shields.io/badge/dependencies-numpy%20%C2%B7%20scipy%20%C2%B7%20pandas-lightgrey" alt="numpy · scipy · pandas">
@@ -204,13 +204,19 @@ cancel and resubscribe, or pause over the summer. Time-to-first-cancellation can
 and the error runs the wrong way: the subscribers written off as lost are disproportionately in
 the *control* arm, so at a 20% win-back rate it overstates the win by **44%**.
 
+**[How the effect develops](docs/horizons.md)** — `lift_by_horizon`. Every readout here is at
+one stated horizon, which answers *how much* and never *when*. An offer that buys three months
+and then fades has the same twelve-period number as one that keeps buying, and they are not the
+same product. Bands are simultaneous across the horizons examined, calibrated on the 0.85
+correlation nested horizons actually have.
+
 **[Voluntary vs involuntary churn](docs/competing-risks.md)** — `churn_decomposition`. A fifth to
 two fifths of subscription churn is a failed card, not a decision, and a save offer cannot act on
 it. The split is an exact identity, not an attribution, so causes sum to the headline with no
 residual — against a stratified headline too, if you pass the same `strata=` — and it surfaces effects a single hazard cannot express, such as retention *increasing*
 exposure to payment failure.
 
-**[Pre-period variance reduction](docs/getting-started.md)** — `cuped`. The strongest variance
+**[Pre-period variance reduction](docs/variance-reduction.md)** — `cuped`. The strongest variance
 reducer available is rarely a cleverer estimator; it is the subscriber's own behaviour before
 randomisation. The usual CUPED derivation is for a difference in means, and this estimand is not
 one — but any estimator that exposes an influence function is a mean of it, and a covariate's
@@ -218,20 +224,20 @@ imbalance between arms is another, so projecting the first onto the second works
 occupancy, competing risks or a segment alike. Pre-period tenure alone removes **11%** of the
 variance in simulation, and it never touches the outcome model.
 
-**Triggered interventions** — `complier_effect`. A save offer fires when someone opens the cancel
+**[Triggered interventions](docs/design.md#assignment-is-not-exposure)** — `complier_effect`. A save offer fires when someone opens the cancel
 flow, so most of the base never meets it. Intention to treat — what every estimator here reports —
 is the effect of *being assigned*, which is what a launch decision wants. The complier effect is
 what the offer does to someone who sees it, which is what a design decision wants. At a 25%
 trigger rate they differ by a factor of four, and quoting the second as the first overstates the
 programme by exactly the reciprocal of the exposure rate.
 
-**Flexible nuisance models** — `learner=`. `adjusted` fits a logistic hazard by default. Pass any
+**[Flexible nuisance models](docs/variance-reduction.md#4-a-flexible-model-learner)** — `learner=`. `adjusted` fits a logistic hazard by default. Pass any
 classifier with `fit` and `predict_proba` and it is **cross-fitted automatically**: a flexible
 model fitted on the same rows the estimate is read from carries a bias of the same order as the
 effect, and the augmentation does not remove it. Cross-fitting is the difference between double
 machine learning and using machine learning.
 
-**Clustered randomisation** — `cluster=`. When accounts are randomised but subscriptions are
+**[Clustered randomisation](docs/design.md#the-randomised-unit-is-coarser-than-the-analysed-one)** — `cluster=`. When accounts are randomised but subscriptions are
 analysed, subscriptions within an account are not independent, and intervals computed as if they
 were come out too narrow with no warning. Pass the unit you actually randomised and every interval
 — contrasts, segments, arms, and the confidence sequences — treats clusters as the independent
@@ -243,13 +249,13 @@ silently. `check_censoring` tests whether censoring is really administrative, an
 [`censoring_sensitivity`](docs/assumptions.md#2-censoring-is-administrative) bounds the part no
 test can reach: how far independent censoring would have to fail before the conclusion changes.
 
-**Families you assemble yourself** — `correct_family`. `multi_arm_lift` knows about arms and
+**[Families you assemble yourself](docs/families.md)** — `correct_family`. `multi_arm_lift` knows about arms and
 `segment_scan` about segments, but only you know what you actually looked at. Three arms over four
 segments is twelve comparisons, not three plus four. This is also where max-t earns most: with a
 flat price, LTV and retained periods correlate at **1.00** — the same statistic scaled — and it
 prices them as the one comparison they are.
 
-**Planning and targeting** — `duration_to_detect` answers how long until the test can answer the
+**[Planning and targeting](docs/planning.md)** — `duration_to_detect` answers how long until the test can answer the
 question, by simulating your actual enrollment schedule. `qini` gives cross-fitted per-subscriber
 effects, with a pooled shrunk-interaction learner that beats a T-learner whether or not effect
 modification is real (0.26 → 0.62 when it isn't, 0.94 → 0.97 when it is).
@@ -384,6 +390,7 @@ a hot path is easy and no correctness test would catch it.
 | `LiftResult.confidence_sequence` | anytime-valid interval |
 | `LiftResult.relative_ci` | interval for the % lift (delta method, not `ci / control`) |
 | `LiftResult.curves` | per-arm survival and cumulative value |
+| `lift_by_horizon` | the effect's trajectory, with simultaneous bands |
 | `duration_to_detect` | how long until this test can answer |
 | `qini` / `uplift_scores` | targeting |
 | `simulate_experiment` / `simulate_multi_arm` | ground-truth data for planning and validation |
@@ -451,6 +458,11 @@ Stated rather than buried:
 | [Subscriptions that come back](docs/win-backs.md) | Win-backs, pauses, and what they do to the estimate |
 | [Voluntary vs involuntary churn](docs/competing-risks.md) | Competing risks, and why the split is exact |
 | [Assumptions](docs/assumptions.md) | When sublift is wrong — read this one |
+| [Getting a tighter interval](docs/variance-reduction.md) | CUPED, stratification, adjustment, learners |
+| [When the design is not what the analysis assumes](docs/design.md) | Clustering, triggered interventions |
+| [How the effect develops](docs/horizons.md) | The trajectory over horizons |
+| [Families the library cannot see](docs/families.md) | Correcting across what you actually looked at |
+| [Before and after](docs/planning.md) | Duration planning, and who to target |
 | [Method](docs/method.md) | The estimand, the influence functions, the references |
 
 ## Contributing
