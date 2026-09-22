@@ -18,7 +18,6 @@
   <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.10–3.13">
   <img src="https://img.shields.io/badge/tests-328-brightgreen" alt="328 tests">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0">
-  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <img src="https://img.shields.io/badge/dependencies-numpy%20%C2%B7%20scipy%20%C2%B7%20pandas-lightgrey" alt="numpy · scipy · pandas">
 </p>
 
@@ -88,8 +87,10 @@ crosses any fixed boundary. Measured [below](#evidence): **26.4%** across sixtee
 
 ## Install
 
+sublift is not on PyPI yet. Install it from GitHub:
+
 ```bash
-pip install sublift
+pip install "sublift @ git+https://github.com/devjoinedthechat/sublift"
 ```
 
 Python 3.10+. Depends on numpy, scipy and pandas — nothing else.
@@ -403,7 +404,7 @@ a hot path is easy and no correctness test would catch it.
 | `qini` / `uplift_scores` | targeting |
 | `simulate_experiment` / `simulate_multi_arm` | ground-truth data for planning and validation |
 
-Twenty functions, of which a first analysis needs about seven. The rest of the public namespace is
+Two dozen functions, of which a first analysis needs about seven. The rest of the public namespace is
 the result types those functions hand back — `LiftResult`, `SegmentScan`, `ExperimentReview` —
 exported so they can be annotated and inspected, not because anything needs to construct them.
 
